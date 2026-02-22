@@ -62,8 +62,7 @@ void createJitDir() {
 }
 int main(int argc, char* argv[]) {
     //argv[0] is always the file name
-    //argv[1] I want it to be the command jit
-    //argv[2] I want it to be the command init
+    //argv[1] I want it to be the command init
     if (strcmp(argv[1],"init")==0) {
         createJitDir();
         printf("\n Jit initialised created \n");
@@ -74,9 +73,3 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
-
-
-/*
- Functions used here in this file:
-
- */
