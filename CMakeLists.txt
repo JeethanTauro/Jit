@@ -3,4 +3,6 @@ project(Jit C)
 
 set(CMAKE_C_STANDARD 23)
 
-add_executable(Jit main.c)
+add_executable(jit main.c
+        init.c
+        init.h)
