@@ -1,0 +1,11 @@
+cmake-build-debug/
+cmake-build-release/
+build/
+.idea/
+*.o
+*.out
+*.exe
+*.a
+*.so
+.jit/
+/jit
