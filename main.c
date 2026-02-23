@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "init.h"
+#include "add.h"
 
 
 int main(int argc, char* argv[]) {
@@ -13,6 +14,9 @@ int main(int argc, char* argv[]) {
     if (strcmp(argv[1],"init")==0) {
         createJitDir();
         printf("\n Jit initialised created \n");
+    }
+    if (strcmp(argv[1], "add") == 0) {
+        addFile(argv + 2);
     }
     else {
         perror("SYNTAX : filename jit init");

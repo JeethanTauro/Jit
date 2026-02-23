@@ -5,4 +5,6 @@ set(CMAKE_C_STANDARD 23)
 
 add_executable(jit main.c
         init.c
-        init.h)
+        init.h
+        add.c
+        add.h)
