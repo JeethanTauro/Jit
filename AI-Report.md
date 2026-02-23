@@ -465,3 +465,270 @@ Linux doesn't look in the current folder for executables by default. The `./` ex
 ---
 
 *Last updated: February 2026*
+
+
+# Jit — Day 2 Progress
+### jit add command + SHA1 deep dive
+
+---
+
+## What we built today: jit add
+
+`jit add filename` stages a file by:
+1. Reading its contents
+2. SHA1 hashing the contents
+3. Storing the contents as a blob in `.jit/objects/`
+4. Updating `.jit/index` with the hash and filename
+
+---
+
+## New C Concepts Used
+
+### fread()
+Reads binary data from a file into a buffer. Returns the number of bytes actually read:
+```c
+char buffer[1024];
+size_t length = fread(buffer, sizeof(char), 1024, fptr);
+// buffer = where to store the data
+// sizeof(char) = size of each element (1 byte)
+// 1024 = max number of elements to read
+// fptr = the file to read from
+// length = how many bytes were actually read
+```
+We use `length` later for hashing and writing — important to use the actual bytes read, not just 1024.
+
+### fwrite()
+Writes binary data from a buffer into a file:
+```c
+fwrite(buffer, 1, length, f);
+// buffer = data to write
+// 1 = size of each element
+// length = number of elements to write
+// f = file to write into
+```
+
+### snprintf()
+Builds a string safely into a buffer. Like printf but into a char array instead of the terminal:
+```c
+char dirPath[50];
+snprintf(dirPath, sizeof(dirPath), "./.jit/objects/%s", dir);
+// result: "./.jit/objects/48"
+```
+The `sizeof(dirPath)` prevents writing more characters than the buffer can hold — avoids buffer overflow.
+
+### strncpy()
+Copies a specific number of characters from one string to another:
+```c
+char dir[3];
+strncpy(dir, hex, 2);   // copy first 2 characters of hex into dir
+dir[2] = '\0';           // manually add null terminator
+
+char file[39];
+strncpy(file, hex + 2, 38);  // copy from position 2 onwards
+file[38] = '\0';
+```
+`hex + 2` is pointer arithmetic — it means "start reading hex from index 2 onwards."
+
+### Variable shadowing — what to avoid
+If you name two variables the same thing in nested loops, the inner one "shadows" the outer one causing bugs:
+```c
+for (int i = 0; arr[i] != NULL; i++) {       // outer i
+    for (int i = 0; i < SHA_DIGEST_LENGTH; i++) {  // BAD! shadows outer i
+    }
+}
+```
+Fix by using a different name for the inner loop:
+```c
+for (int j = 0; j < SHA_DIGEST_LENGTH; j++) {  // j instead of i
+    sprintf(hex + (j * 2), "%02x", hash[j]);
+}
+```
+
+### Array of pointers — char *arr[]
+An array of strings in C. Used to pass multiple filenames to `addFile`:
+```c
+void addFile(char *arr[])
+// arr[0] = first filename
+// arr[1] = second filename
+// arr[i] == NULL means end of array (argv is NULL terminated)
+```
+In main.c we pass `argv + 2` which means "start from argv[2] onwards, skipping program name and 'add'."
+
+---
+
+## SHA1 — Deep Dive
+
+### What is SHA1?
+SHA1 (Secure Hash Algorithm 1) is a hashing function. It takes any input (a file, a string, anything) and produces a fixed size output called a digest. No matter how big or small the input is, the output is always the same size.
+
+Key properties:
+- Same input always produces the same output
+- Even a tiny change in input produces a completely different output
+- You cannot reverse it — you can't get the input back from the hash
+- This is why Git uses it — if two files have the same hash, they are identical
+
+### What SHA1 actually produces — 20 raw bytes
+```c
+unsigned char hash[SHA_DIGEST_LENGTH];  // SHA_DIGEST_LENGTH = 20
+SHA1(buffer, length, hash);
+```
+
+`hash` is an array of 20 `unsigned char` values. Each `unsigned char` is one byte, which can hold a value from 0 to 255.
+
+For example, `hash` might look like this in memory:
+```
+hash[0]  = 72   (decimal) = 0x48 (hex)
+hash[1]  = 132  (decimal) = 0x84 (hex)
+hash[2]  = 182  (decimal) = 0xb6 (hex)
+...
+hash[19] = 185  (decimal) = 0xb9 (hex)
+```
+
+These are raw binary values — not human readable text.
+
+### Converting 20 bytes to 40 hex characters
+
+Each byte (0-255) can be represented as exactly 2 hex digits (00 to ff). So 20 bytes × 2 hex digits = 40 characters total.
+
+```c
+char hex[41]; // 40 characters + 1 null terminator
+for (int j = 0; j < SHA_DIGEST_LENGTH; j++) {
+    sprintf(hex + (j * 2), "%02x", hash[j]);
+}
+hex[40] = '\0';
+```
+
+**Breaking this down line by line:**
+
+`char hex[41]` — array of 41 characters. 40 for the hex string, 1 extra for the null terminator `\0` that marks the end of a string in C.
+
+`sprintf(hex + (j * 2), "%02x", hash[j])` — this is the key line. Let's break it apart:
+
+- `sprintf` — like printf but writes into a string instead of the terminal
+- `hex + (j * 2)` — pointer arithmetic. On iteration 0: write at position 0. On iteration 1: write at position 2. On iteration 2: write at position 4. Each byte takes 2 characters so we jump by 2 each time.
+- `"%02x"` — format specifier meaning: print as hexadecimal (`x`), minimum 2 digits (`2`), pad with zeros if needed (`0`). So the value 8 prints as `08` not just `8`.
+- `hash[j]` — the raw byte value to convert
+
+**Example walkthrough for first two bytes:**
+```
+j=0: hash[0] = 72 = 0x48
+     sprintf(hex + 0, "%02x", 72)
+     writes "48" at position 0 of hex
+
+j=1: hash[1] = 132 = 0x84
+     sprintf(hex + 2, "%02x", 132)
+     writes "84" at position 2 of hex
+
+result so far: hex = "4884..."
+```
+
+After all 20 iterations, hex contains the full 40 character string like:
+```
+4884b6c315133b4693380803751de34594693bb9
+```
+
+`hex[40] = '\0'` — manually null terminate the string so C knows where it ends.
+
+---
+
+## add.h
+```c
+#ifndef ADD_H
+#define ADD_H
+
+void addFile(char *arr[]);
+
+#endif
+```
+
+## add.c — Full Code
+```c
+#include <stdio.h>
+#include <string.h>
+#include <openssl/sha.h>
+#include <sys/stat.h>
+#include "add.h"
+
+void addFile(char *arr[]) {
+    char buffer[1024];
+    for (int i = 0; arr[i] != NULL; i++) {
+
+        // step 1 & 2: open and read file into buffer
+        FILE* fptr = fopen(arr[i], "r");
+        if (fptr == NULL) {
+            printf("file not found: %s\n", arr[i]);
+            continue;
+        }
+        const size_t length = fread(buffer, sizeof(char), 1024, fptr);
+        fclose(fptr);
+
+        // step 3: SHA1 hash the contents
+        unsigned char hash[SHA_DIGEST_LENGTH];
+        SHA1(buffer, length, hash);
+
+        // convert 20 raw bytes to 40 hex characters
+        char hex[41];
+        for (int j = 0; j < SHA_DIGEST_LENGTH; j++) {
+            sprintf(hex + (j * 2), "%02x", hash[j]);
+        }
+        hex[40] = '\0';
+
+        // step 4: split hash into dir (first 2) and filename (rest 38)
+        char dir[3];
+        char file[39];
+        strncpy(dir, hex, 2);
+        dir[2] = '\0';
+        strncpy(file, hex + 2, 38);
+        file[38] = '\0';
+
+        // step 5 & 6: create blob in .jit/objects/
+        char dirPath[50];
+        char filePath[100];
+        snprintf(dirPath, sizeof(dirPath), "./.jit/objects/%s", dir);
+        snprintf(filePath, sizeof(filePath), "./.jit/objects/%s/%s", dir, file);
+
+        mkdir(dirPath, 0755);
+        FILE* f = fopen(filePath, "w");
+        if (f == NULL) {
+            perror("failed to create blob");
+            return;
+        }
+        fwrite(buffer, 1, length, f);
+        fclose(f);
+
+        // step 7: update the index
+        FILE* index = fopen("./.jit/index", "a");
+        if (index == NULL) {
+            perror("failed to open index");
+            return;
+        }
+        fprintf(index, "%s %s\n", hex, arr[i]);
+        fclose(index);
+    }
+}
+```
+
+## main.c update
+```c
+if (strcmp(argv[1], "add") == 0) {
+    addFile(argv + 2);
+}
+```
+
+## Compile command
+```bash
+gcc main.c init.c add.c -lssl -lcrypto -o jit
+```
+`-lssl -lcrypto` flags are required because SHA1 comes from the OpenSSL library.
+
+## Result
+```
+$ ./jit add main.c
+```
+Creates:
+- `.jit/objects/48/84b6c315133b4693380803751de34594693bb9` — the blob file containing main.c contents
+- `.jit/index` updated with: `4884b6c315133b4693380803751de34594693bb9 main.c`
+
+---
+
+*Last updated: February 2026*
