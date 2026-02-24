@@ -732,3 +732,613 @@ Creates:
 ---
 
 *Last updated: February 2026*
+
+# Jit — Day 3 Progress
+### jit commit + Deep dive into C string/file functions and pointers
+
+---
+
+## Table of Contents
+1. [What we built today](#built)
+2. [Steps taken to implement jit commit](#steps)
+3. [The hashing_and_storing helper function](#helper)
+4. [char buffer[] vs char *buffer vs char *buffer[]](#buffers)
+5. [String Functions — Complete Reference](#strings)
+6. [File Functions — Complete Reference](#files)
+7. [The time() function](#time)
+8. [Full commit.c code](#code)
+
+---
+
+## 1. What we built today <a name="built"></a>
+
+`jit commit -m "message"` — saves a permanent snapshot of the staged files.
+
+**What it creates:**
+- A **tree object** in `.jit/objects/` representing the current state of the index
+- A **commit object** in `.jit/objects/` containing tree hash, parent hash, author, timestamp, message
+- Updates `.jit/refs/heads/master` with the new commit hash
+
+**Verified working:**
+```
+tree bc278996f2323daca576c0120a761e438e92c4cc
+parent none
+author Jeethan
+timestamp 1771902789
+message my first commit
+```
+
+And second commit correctly chains back:
+```
+tree 0e5330dddd5ab339c3df2c36e70291e1410601dd
+parent e040c185d806f946804c7c48816147604e1c320a
+author Jeethan
+timestamp 1771903044
+message my second commit
+```
+
+---
+
+## 2. Steps taken to implement jit commit <a name="steps"></a>
+
+### Step 1 — Read the index line by line
+Open `.jit/index` and read each line using `fgets()`. Each line looks like:
+```
+4884b6c315133b4693380803751de34594693bb9 main.c
+```
+
+### Step 2 — Build the tree string
+For each line read from the index, prepend `blob ` to it and append to a large buffer:
+```
+blob 4884b6c315133b4693380803751de34594693bb9 main.c
+blob 9f3a21bc45... add.c
+```
+This combined string is the tree content.
+
+### Step 3 — Hash and store the tree object
+Pass the tree string to `hashing_and_storing()`:
+- SHA1 hash the string
+- Convert hash to 40 char hex string
+- Split hex into first 2 chars (folder) and remaining 38 chars (filename)
+- Create folder in `.jit/objects/`
+- Write the tree string as file contents
+- Return the hex hash
+
+### Step 4 — Find the parent commit hash
+Try to open `.jit/refs/heads/master`:
+- If it doesn't exist → first commit, parent = `"none"`
+- If it exists → read the hash inside it, that's the parent
+
+### Step 5 — Build the commit string in memory
+```c
+snprintf(commitContent, sizeof(commitContent),
+    "tree %s\nparent %s\nauthor Jeethan\ntimestamp %ld\nmessage %s\n",
+    treeHash, parentHash, (long)timestamp, str);
+```
+Build the entire commit as one string in memory. No need to write to a temporary file.
+
+### Step 6 — Hash and store the commit object
+Pass `commitContent` to `hashing_and_storing()` — same function used for the tree. Returns the commit hash.
+
+### Step 7 — Update the branch pointer
+- Read `.jit/HEAD` to get `ref: refs/heads/master`
+- Extract branch name using `sscanf()`
+- Build path `.jit/refs/heads/master`
+- Write the new commit hash into that file, overwriting the previous one
+
+---
+
+## 3. The hashing_and_storing helper function <a name="helper"></a>
+
+We created a reusable helper function that both the tree and commit use. It:
+1. Takes any string as input
+2. SHA1 hashes it
+3. Converts to hex
+4. Splits into dir/file
+5. Creates the object file in `.jit/objects/`
+6. Returns the hex hash
+
+**Why `static char hex[41]`?**
+
+Local variables in C are destroyed when a function returns. If you return a pointer to a local variable, that memory is gone and the pointer is dangling — this causes crashes or garbage data.
+
+`static` makes the variable persist in memory even after the function returns, so returning a pointer to it is safe:
+```c
+static char hex[41];  // lives for entire program duration
+return hex;           // safe to return this pointer
+```
+
+**Important caveat:** because it's static, there is only ONE copy of it. If you call `hashing_and_storing()` twice without copying the result, the second call overwrites the first. That's why we use `strcpy()` to copy the result immediately:
+```c
+char treeHash[41];
+strcpy(treeHash, hashing_and_storing(treeContent));  // copy before calling again
+```
+
+---
+
+## 4. char buffer[] vs char *buffer vs char *buffer[] <a name="buffers"></a>
+
+This is one of the most important and confusing topics in C. Let's break it down clearly.
+
+### char buffer[1024] — fixed size array on the stack
+
+```c
+char buffer[1024];
+```
+
+- Allocates 1024 bytes on the **stack** (local memory)
+- Size is fixed at compile time, cannot change
+- Memory is automatically freed when function returns
+- `buffer` is the address of the first character
+- Use when: you know the maximum size ahead of time
+
+```c
+char name[50];
+strcpy(name, "Jeethan");  // stores "Jeethan" in the array
+printf("%s", name);       // prints "Jeethan"
+```
+
+### char *buffer — pointer to a character (or string)
+
+```c
+char *buffer;
+```
+
+- Just a pointer — stores a memory address
+- Points to wherever you tell it to point
+- Can point to a string literal, an array, or dynamically allocated memory
+- Size is flexible — can point to strings of any length
+- Use when: you don't know the size, or you're returning strings from functions, or pointing to existing strings
+
+```c
+char *name = "Jeethan";        // points to a string literal (read only)
+char *ptr = buffer;            // points to an existing array
+static char hex[41];
+return hex;                    // returning a pointer to static array
+```
+
+**Key difference:**
+```c
+char buffer[10] = "hello";   // buffer IS the memory, contains "hello"
+char *ptr = "hello";         // ptr POINTS TO memory containing "hello"
+```
+
+Think of it like:
+- `char buffer[]` = a house (the actual storage)
+- `char *ptr` = an address on a piece of paper (just tells you where the house is)
+
+### char *buffer[] — array of pointers (array of strings)
+
+```c
+char *buffer[];
+```
+
+- An array where each element is a pointer to a string
+- This is what `argv` is — an array of string pointers
+- Each `buffer[i]` points to a different string
+- The array ends with a NULL pointer
+
+```c
+char *fruits[] = {"apple", "banana", "mango", NULL};
+printf("%s", fruits[0]);  // prints "apple"
+printf("%s", fruits[1]);  // prints "banana"
+```
+
+This is exactly what we use in `addFile(char *arr[])`:
+```c
+void addFile(char *arr[]) {
+    for (int i = 0; arr[i] != NULL; i++) {
+        // arr[0] = "main.c"
+        // arr[1] = "add.c"
+        // arr[2] = NULL  ← stops here
+    }
+}
+```
+
+And in main.c we pass `argv + 2` which means "start the array from index 2 onwards":
+```c
+addFile(argv + 2);
+// argv[0] = "./jit"
+// argv[1] = "add"
+// argv[2] = "main.c"   ← addFile starts here
+// argv[3] = "add.c"
+// argv[4] = NULL
+```
+
+### Summary table:
+```
+Type          What it is                    Use when
+──────────────────────────────────────────────────────────────
+char buf[N]   Fixed array, N bytes          Know max size upfront
+char *ptr     Pointer to a string           Flexible, returning strings
+char *arr[]   Array of string pointers      Multiple strings, like argv
+```
+
+---
+
+## 5. String Functions — Complete Reference <a name="strings"></a>
+
+All require `#include <string.h>` unless noted.
+
+### strlen()
+Returns the length of a string, not counting the null terminator:
+```c
+strlen("hello");      // returns 5
+strlen("Jeethan");    // returns 7
+```
+Use when: you need to know how many characters are in a string.
+
+### strcpy()
+Copies one string into another:
+```c
+char dest[41];
+strcpy(dest, "hello");         // dest now contains "hello"
+strcpy(dest, sourceString);    // copies sourceString into dest
+```
+**Warning:** dest must be large enough to hold the source. No bounds checking.
+Use when: copying a string into a buffer you own.
+
+### strncpy()
+Like strcpy but copies at most N characters. Safer:
+```c
+char dir[3];
+strncpy(dir, hex, 2);   // copy only first 2 characters
+dir[2] = '\0';           // always manually null terminate after strncpy!
+```
+**Important:** strncpy does NOT always add null terminator, so always add it manually.
+Use when: copying a specific number of characters.
+
+### strcat()
+Appends one string to the end of another:
+```c
+char result[100] = "hello ";
+strcat(result, "world");   // result is now "hello world"
+```
+**Warning:** destination must have enough space for both strings combined.
+Use when: building up a string piece by piece.
+
+### strcmp()
+Compares two strings. Returns 0 if equal, non-zero if different:
+```c
+strcmp("init", "init")    // returns 0 (equal)
+strcmp("add", "init")     // returns non-zero (different)
+
+if (strcmp(argv[1], "init") == 0) {
+    // strings match
+}
+```
+**Why not use ==?** In C, `==` compares memory addresses, not contents. Two strings can contain the same characters but live at different addresses. `strcmp` compares actual characters.
+Use when: comparing any two strings in C.
+
+### sprintf()
+Like printf but writes into a string instead of the terminal:
+```c
+char result[50];
+sprintf(result, "%02x", 255);     // result = "ff"
+sprintf(result, "hello %s", name); // result = "hello Jeethan"
+```
+Use when: building a string from formatted values.
+
+### snprintf()
+Like sprintf but with a size limit — prevents buffer overflow:
+```c
+char dirPath[50];
+snprintf(dirPath, sizeof(dirPath), "./.jit/objects/%s", dir);
+// will never write more than sizeof(dirPath) bytes
+```
+Use when: building path strings or any formatted string. **Prefer this over sprintf always.**
+
+### sscanf()
+Like scanf but reads from a string instead of the terminal:
+```c
+char line[] = "ref: refs/heads/master";
+char branch[100];
+sscanf(line, "ref: refs/heads/%s", branch);
+// branch now contains "master"
+```
+Use when: parsing/extracting values from a string with a known format.
+
+### memset()
+Fills a block of memory with a specific value:
+```c
+char buffer[1024];
+memset(buffer, 0, sizeof(buffer));  // fills entire buffer with zeros
+```
+Use when: initializing a buffer to zero/empty before use.
+
+### memcpy()
+Copies raw bytes from one memory location to another:
+```c
+memcpy(dest, src, numBytes);
+```
+Use when: copying binary data (not just strings). Unlike strcpy, works with any data type and doesn't stop at null terminator.
+
+---
+
+## 6. File Functions — Complete Reference <a name="files"></a>
+
+All require `#include <stdio.h>`.
+
+### fopen()
+Opens a file. Returns FILE pointer or NULL on failure:
+```c
+FILE *f = fopen("path/to/file", mode);
+```
+
+**Modes:**
+```
+"r"   read only — file must exist
+"w"   write — creates file, OVERWRITES if exists
+"a"   append — creates file, adds to END if exists
+"r+"  read and write — file must exist
+"w+"  read and write — creates file, overwrites if exists
+"rb"  read binary
+"wb"  write binary
+```
+
+Always check for NULL:
+```c
+FILE *f = fopen("file.txt", "r");
+if (f == NULL) {
+    perror("failed to open");
+    return;
+}
+```
+
+### fclose()
+Closes a file. Always close what you open:
+```c
+fclose(f);
+```
+Not closing causes: data not flushed to disk, file descriptor leak, file corruption.
+
+### fread()
+Reads binary data from file into buffer. Returns bytes actually read:
+```c
+size_t bytesRead = fread(buffer, elementSize, count, file);
+// buffer     = where to store data
+// elementSize = size of each element (usually 1 for bytes)
+// count       = max number of elements to read
+// file        = file pointer
+```
+
+Example:
+```c
+char buffer[1024];
+size_t len = fread(buffer, sizeof(char), 1024, fptr);
+// len = actual number of bytes read
+```
+Use when: reading binary files or when you need exact byte count.
+
+### fwrite()
+Writes binary data from buffer to file:
+```c
+fwrite(buffer, elementSize, count, file);
+```
+
+Example:
+```c
+fwrite(buffer, 1, length, f);  // write exactly 'length' bytes
+```
+Use when: writing binary data or raw bytes to files.
+
+### fprintf()
+Writes formatted text to a file (like printf but to file):
+```c
+fprintf(f, "tree %s\n", treeHash);
+fprintf(f, "timestamp %ld\n", (long)timestamp);
+```
+Use when: writing human-readable text with formatting to files.
+
+### fgets()
+Reads one line at a time from a file. Stops at newline or EOF:
+```c
+char line[256];
+while (fgets(line, sizeof(line), file)) {
+    // line contains one line including the \n at the end
+    // loop stops when fgets returns NULL (end of file)
+}
+```
+Use when: reading a file line by line.
+
+### fgetc() / fputc()
+Read or write one character at a time:
+```c
+int c = fgetc(file);     // read one char
+fputc('A', file);        // write one char
+```
+Use when: processing character by character.
+
+### rewind()
+Moves the file position back to the beginning:
+```c
+rewind(file);
+```
+Use when: you want to read a file again from the start after already reading it.
+
+### fseek() and ftell()
+Move to a specific position in a file, and get current position:
+```c
+fseek(file, 0, SEEK_END);   // move to end of file
+long size = ftell(file);     // get current position = file size
+fseek(file, 0, SEEK_SET);   // move back to beginning
+```
+Use when: you need to know file size, or jump to a specific byte position.
+
+### When to use fread vs fgets vs fprintf:
+```
+Reading binary data          → fread
+Reading text line by line    → fgets
+Writing formatted text       → fprintf
+Writing binary/raw bytes     → fwrite
+```
+
+---
+
+## 7. The time() function <a name="time"></a>
+
+Requires `#include <time.h>`.
+
+### What is Unix timestamp?
+A Unix timestamp is the number of seconds that have passed since **January 1, 1970 at 00:00:00 UTC** (called the Unix Epoch). It's a single large integer that represents any point in time unambiguously.
+
+For example:
+```
+0           = Jan 1, 1970 00:00:00
+1000000000  = Sep 9, 2001
+1771902789  = Feb 24, 2026  ← your first commit timestamp
+```
+
+### time()
+Returns the current Unix timestamp:
+```c
+time_t timestamp;
+time(&timestamp);           // fills timestamp with current time
+// OR
+time_t timestamp = time(NULL);  // same thing, shorter form
+```
+
+`time_t` is just a typedef for `long` — a large integer holding seconds since epoch.
+
+### Printing the timestamp:
+```c
+printf("%ld", (long)timestamp);   // prints raw number like 1771902789
+```
+
+### Converting to human readable with ctime():
+```c
+printf("%s", ctime(&timestamp));
+// prints: Mon Feb 24 12:34:56 2026
+```
+
+### Why we use raw timestamp instead of ctime():
+Raw timestamp is better for storage because:
+- Smaller (just a number)
+- No timezone ambiguity
+- Easy to compare (bigger number = later time)
+- Easy to calculate differences between times
+
+---
+
+## 8. Full commit.c code <a name="code"></a>
+
+```c
+#include <stdio.h>
+#include <string.h>
+#include <openssl/sha.h>
+#include <sys/stat.h>
+#include <time.h>
+#include "commit.h"
+
+char* hashing_and_storing(char treeContent[]) {
+    size_t len = strlen(treeContent);
+
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1(treeContent, len, hash);
+
+    static char hex[41];
+    for (int j = 0; j < SHA_DIGEST_LENGTH; j++) {
+        sprintf(hex + (j * 2), "%02x", hash[j]);
+    }
+    hex[40] = '\0';
+
+    char dir[3];
+    char file[39];
+    strncpy(dir, hex, 2);
+    dir[2] = '\0';
+    strncpy(file, hex + 2, 38);
+    file[38] = '\0';
+
+    char dirPath[50];
+    char filePath[100];
+    snprintf(dirPath, sizeof(dirPath), "./.jit/objects/%s", dir);
+    snprintf(filePath, sizeof(filePath), "./.jit/objects/%s/%s", dir, file);
+
+    mkdir(dirPath, 0755);
+    FILE* f = fopen(filePath, "w");
+    if (f == NULL) {
+        perror("failed to create object");
+    }
+    fwrite(treeContent, 1, len, f);
+    fclose(f);
+
+    return hex;
+}
+
+void commitFile(char str[]) {
+    // step 1-3: read index, build tree string, hash and store it
+    FILE* fptr = fopen("./.jit/index", "r");
+    if (fptr == NULL) {
+        perror("Couldn't open index");
+        return;
+    }
+    char treeContent[4096] = "";
+    char line[256];
+    while (fgets(line, sizeof(line), fptr)) {
+        char entry[300];
+        snprintf(entry, sizeof(entry), "blob %s", line);
+        strcat(treeContent, entry);
+    }
+    fclose(fptr);
+
+    char treeHash[41];
+    strcpy(treeHash, hashing_and_storing(treeContent));
+
+    // step 4: get timestamp and parent hash
+    time_t timestamp;
+    time(&timestamp);
+
+    FILE* parentHashFile = fopen("./.jit/refs/heads/master", "r");
+    char parentHash[41] = "none";
+    if (parentHashFile != NULL) {
+        fread(parentHash, 1, 41, parentHashFile);
+        fclose(parentHashFile);
+    }
+
+    // build commit string, hash and store it
+    char commitHash[41];
+    char commitContent[1024];
+    snprintf(commitContent, sizeof(commitContent),
+        "tree %s\nparent %s\nauthor Jeethan\ntimestamp %ld\nmessage %s\n",
+        treeHash, parentHash, (long)timestamp, str);
+    strcpy(commitHash, hashing_and_storing(commitContent));
+
+    // step 5: update branch pointer
+    char readLine[256];
+    char branch[100];
+    FILE* HeadFile = fopen("./.jit/HEAD", "r");
+    if (HeadFile == NULL) {
+        perror("Failed to open HEAD");
+        return;
+    }
+    fgets(readLine, sizeof(readLine), HeadFile);
+    sscanf(readLine, "ref: refs/heads/%s", branch);
+    fclose(HeadFile);
+
+    char masterPath[200];
+    snprintf(masterPath, sizeof(masterPath), "./.jit/refs/heads/%s", branch);
+    FILE* master = fopen(masterPath, "w");
+    fprintf(master, "%s", commitHash);
+    fclose(master);
+
+    printf("\n Jit committed\n");
+}
+```
+
+---
+
+## Compile command
+```bash
+gcc main.c init.c add.c commit.c -lssl -lcrypto -o jit
+```
+
+## Commands now working:
+```
+jit init      ✅
+jit add       ✅
+jit commit    ✅
+```
+
+---
+
+*Last updated: February 2026*
