@@ -37,7 +37,7 @@ void createJitDir() {
             printf("\n head directory created");
 
             //creating a HEAD file
-            FILE* file_ptr = fopen("./.jit/refs/heads/HEAD","w");
+            FILE* file_ptr = fopen("./.jit/HEAD","w");
             if(file_ptr == NULL) {
                 perror("\n failed to create file");
                 return;
