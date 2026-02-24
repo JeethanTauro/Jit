@@ -7,4 +7,6 @@ add_executable(jit main.c
         init.c
         init.h
         add.c
-        add.h)
+        add.h
+        commit.c
+        commit.h)
