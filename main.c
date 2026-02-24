@@ -2,7 +2,7 @@
 #include <string.h>
 #include "init.h"
 #include "add.h"
-
+#include "commit.h"
 
 int main(int argc, char* argv[]) {
     //argv[0] is always the file name
@@ -15,11 +15,18 @@ int main(int argc, char* argv[]) {
         createJitDir();
         printf("\n Jit initialised created \n");
     }
-    if (strcmp(argv[1], "add") == 0) {
+    else if (strcmp(argv[1], "add") == 0) {
         addFile(argv + 2);
+        for (int i = 2; i < argc; i++) {
+            printf("Jit added %s\n", argv[i]);
+        }
+    }
+    else if (strcmp(argv[1], "commit") == 0 && strcmp(argv[2], "-m") == 0) {
+        commitFile(argv[3]);
+        printf("\n Jit committed \n");
     }
     else {
-        perror("SYNTAX : filename jit init");
+        perror("SYNTAX error");
     }
 
     return 0;
