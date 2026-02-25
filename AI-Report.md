@@ -1342,3 +1342,374 @@ jit commit    ✅
 ---
 
 *Last updated: February 2026*
+
+# Jit — Day 4
+### Compilers, Warnings, Signed vs Unsigned, and Casting
+
+---
+
+## Table of Contents
+1. [What happened today](#today)
+2. [GCC vs Clang — differences in practice](#compilers)
+3. [The warning explained — pointer sign mismatch](#warning)
+4. [signed char vs unsigned char — why it matters](#signedness)
+5. [Casting in C](#casting)
+6. [Compiler warnings — why they matter](#warnings)
+7. [Array Decay — How arrays are treated in C](#decay)
+8. [The fix](#fix)
+
+---
+
+## 1. What happened today <a name="today"></a>
+
+Switched from GCC to Clang to compile the project:
+```bash
+clang main.c init.c commit.c add.c -lssl -lcrypto -o jit
+```
+
+Clang immediately caught two warnings that GCC had silently ignored — both in the SHA1 function calls in `add.c` and `commit.c`. This was a great learning opportunity about types, pointers, and how compilers differ in strictness.
+
+---
+
+## 2. GCC vs Clang — differences in practice <a name="compilers"></a>
+
+Both GCC and Clang are C compilers that do the same fundamental job — turn C code into a binary executable. But they differ in how strict and how helpful they are.
+
+**GCC:**
+- Older, more widely used on Linux
+- Sometimes lets questionable code slide without warning
+- Industry standard, battle tested
+
+**Clang:**
+- Developed by Apple and the LLVM project
+- Stricter and more pedantic about type safety
+- Produces cleaner, more readable error and warning messages
+- Points to the exact character causing the issue
+- Default compiler on macOS
+
+**Same syntax:**
+```bash
+gcc  main.c init.c add.c commit.c -lssl -lcrypto -o jit
+clang main.c init.c add.c commit.c -lssl -lcrypto -o jit
+```
+
+**The warning clang caught but gcc didn't:**
+```
+warning: passing 'char *' to parameter of type 'const unsigned char *'
+converts between pointers to integer types where one is of the unique
+plain 'char' type and the other is not [-Wpointer-sign]
+```
+
+GCC compiled silently. Clang caught a real type mismatch. This is why many developers prefer clang during development — it teaches you better habits.
+
+---
+
+## 3. The warning explained <a name="warning"></a>
+
+The warning came from both `add.c` and `commit.c` when calling SHA1:
+
+```c
+// in add.c
+SHA1(buffer, length, hash);       // buffer is char[]
+
+// in commit.c
+SHA1(treeContent, len, hash);     // treeContent is char[]
+```
+
+SHA1's actual function signature in OpenSSL is:
+```c
+unsigned char *SHA1(const unsigned char *d, size_t n, unsigned char *md);
+//                   ^^^^^^^^^^^^^^^^^^^^
+//                   expects unsigned char pointer
+```
+
+But `buffer` and `treeContent` are both declared as `char[]` — plain signed char. Clang is warning:
+
+**"You're passing a signed char pointer into a function that expects an unsigned char pointer. These are different types."**
+
+The code still compiles and works, but it's technically incorrect and could cause subtle bugs on some systems.
+
+---
+
+## 4. signed char vs unsigned char — why it matters <a name="signedness"></a>
+
+This is one of the most important distinctions in C when dealing with binary data.
+
+### plain char / signed char
+```c
+char c;
+// range: -128 to 127
+// can hold negative values
+// meant for text characters
+```
+
+### unsigned char
+```c
+unsigned char c;
+// range: 0 to 255
+// only positive values
+// meant for raw bytes and binary data
+```
+
+### Why does this matter?
+
+A byte is 8 bits and can represent 256 different values. The question is how you interpret those 256 values:
+
+```
+Binary: 11111111
+
+As signed char:   = -1   (two's complement)
+As unsigned char: = 255  (just the raw value)
+```
+
+When you're dealing with file contents, hashes, and binary data — bytes should never be negative. A byte is just a value from 0 to 255. Using `char` instead of `unsigned char` for binary data can cause:
+- Incorrect hash values on some platforms
+- Wrong comparisons
+- Undefined behavior when values exceed 127
+
+**Rule of thumb:**
+```
+Text/strings     → char
+Binary/raw bytes → unsigned char
+Hashing          → unsigned char (always!)
+```
+
+### Why does char exist at all then?
+Historically C was designed for text processing where characters fit in 0-127 (ASCII range). `char` was sufficient. But modern code deals with binary data, network packets, file bytes etc where values go above 127 — hence `unsigned char` became important.
+
+---
+
+## 5. Casting in C <a name="casting"></a>
+
+A cast is a way of telling the compiler "I know what I'm doing, treat this variable as a different type."
+
+### Syntax:
+```c
+(target_type) variable
+```
+
+### Examples:
+```c
+// cast int to float
+int x = 5;
+float f = (float)x;        // f = 5.0
+
+// cast char* to unsigned char*
+char buffer[1024];
+SHA1((unsigned char*)buffer, length, hash);  // tell compiler to treat as unsigned
+
+// cast time_t to long for printing
+time_t timestamp;
+printf("%ld", (long)timestamp);
+
+// cast pointer to different type
+void* ptr = malloc(100);
+char* buf = (char*)ptr;    // common pattern with malloc
+```
+
+### When to use casting:
+- When passing data to a function that expects a slightly different but compatible type
+- When printing values that need a specific format specifier
+- When working with `void*` pointers from malloc
+- When you genuinely need to reinterpret data as a different type
+
+### When NOT to cast:
+- Don't cast to hide real type errors — casting silences warnings but doesn't fix bugs
+- Don't cast between completely unrelated types without understanding the implications
+
+### The cast we used:
+```c
+SHA1((unsigned char*)buffer, length, hash);
+```
+This tells the compiler: "treat `buffer` as `unsigned char*` for this function call." The data doesn't change, just how the compiler interprets the pointer type.
+
+---
+
+## 6. Compiler warnings — why they matter <a name="warnings"></a>
+
+A warning means: **"this compiled successfully but something looks suspicious."**
+
+Never ignore warnings. Every warning is the compiler telling you something could go wrong. Today's warning was a perfect example — technically the code worked but it was using the wrong type.
+
+### Common warning flags:
+```bash
+-Wall        # enables all common warnings
+-Wextra      # enables extra warnings beyond -Wall
+-Werror      # treats ALL warnings as errors (won't compile if any warning exists)
+-Wpedantic   # strict ISO C compliance warnings
+```
+
+You can compile with:
+```bash
+clang main.c init.c add.c commit.c -lssl -lcrypto -Wall -Wextra -o jit
+```
+
+This gives you maximum warnings and helps catch bugs early.
+
+### Warning vs Error:
+```
+Error   → code cannot compile at all, must fix
+Warning → code compiled but something is suspicious, should fix
+```
+
+Clang is stricter than GCC about warnings, which makes it a better learning tool. When clang warns you, take it seriously.
+
+---
+
+## 7. Array Decay — How arrays are treated in C <a name="decay"></a>
+
+This is one of the most important and surprising things about C. Arrays and pointers are deeply connected.
+
+### What is array decay?
+
+When you pass an array to a function, C automatically converts it into a pointer to its first element. This is called **array decay**. The array "decays" into a pointer.
+
+```c
+char buffer[1024];
+
+// when you write this:
+SHA1(buffer, length, hash);
+
+// C automatically treats it as:
+SHA1(&buffer[0], length, hash);  // pointer to first element
+```
+
+The array name `buffer` by itself, when used in an expression, becomes the address of its first element.
+
+### Visual explanation:
+
+```
+char buffer[1024]:
+
+memory: [h][e][l][l][o][\0][...1018 more bytes...]
+         ↑
+         buffer (address of first element)
+         &buffer[0]
+         (char*)buffer
+         all three mean the same thing!
+```
+
+### The decay chain in our code:
+
+```
+char buffer[1024]       ← declared as array
+      ↓ passed to function
+char*                   ← decays to pointer automatically
+      ↓ clang warns because SHA1 expects
+unsigned char*          ← signedness mismatch!
+```
+
+That's the exact chain that caused our warning. The array decayed to `char*` and THAT is what's incompatible with `unsigned char*`.
+
+### What is lost during decay?
+
+When an array decays to a pointer, the size information is lost:
+
+```c
+char buffer[1024];
+printf("%zu", sizeof(buffer));  // prints 1024 — knows the size
+
+void someFunction(char* buf) {
+    printf("%zu", sizeof(buf));  // prints 8 — just the pointer size, size is LOST!
+}
+```
+
+This is why C functions that take arrays also take a separate `size` or `length` parameter. The function has no way of knowing how big the array is once it decays to a pointer. This is exactly why SHA1 takes `size_t n` as its second argument — it needs to know how many bytes to hash.
+
+### All these are equivalent when passed to a function:
+
+```c
+char buffer[1024] = "hello";
+
+someFunc(buffer);          // array decays to pointer
+someFunc(&buffer[0]);      // explicit address of first element
+someFunc((char*)buffer);   // explicit cast to pointer
+```
+
+All three pass the same thing — the address of the first byte of buffer.
+
+### Arrays vs Pointers — what's actually different:
+
+```c
+char buffer[1024];   // buffer IS the memory, 1024 bytes allocated on stack
+char *ptr;           // ptr is just a variable holding an address, 8 bytes
+
+sizeof(buffer) = 1024   // knows full size
+sizeof(ptr)    = 8      // just the pointer size
+
+buffer = someOtherArray;  // ILLEGAL — can't reassign an array
+ptr = someOtherArray;     // fine — can reassign a pointer anytime
+```
+
+### Why C works this way:
+
+This design comes from C's philosophy of being close to the hardware. Arrays in memory are just contiguous bytes. A pointer is just an address. Passing an entire array by value would mean copying potentially megabytes of data every function call — expensive and wasteful. So C passes just the address (8 bytes) instead. Efficient but requires you to track the size separately.
+
+### Practical rules:
+
+```
+Declaring storage      → use char buffer[N]
+Passing to functions   → array decays to pointer automatically
+Inside functions       → treat as pointer, size is lost
+Binary data/hashing    → use unsigned char, not char
+Always pass size too   → because decay loses size info
+```
+
+---
+
+## 8. The fix <a name="fix"></a>
+
+Cast the buffer to `unsigned char*` when calling SHA1:
+
+**In add.c:**
+```c
+// before
+SHA1(buffer, length, hash);
+
+// after
+SHA1((unsigned char*)buffer, length, hash);
+```
+
+**In commit.c:**
+```c
+// before
+SHA1(treeContent, len, hash);
+
+// after
+SHA1((unsigned char*)treeContent, len, hash);
+```
+
+After fixing, recompile with clang:
+```bash
+clang main.c init.c add.c commit.c -lssl -lcrypto -o jit
+```
+
+No warnings should appear now. Clean compilation = correct types throughout.
+
+---
+
+## Compile commands reference:
+```bash
+# basic
+gcc main.c init.c add.c commit.c -lssl -lcrypto -o jit
+
+# with clang
+clang main.c init.c add.c commit.c -lssl -lcrypto -o jit
+
+# with all warnings enabled (recommended)
+clang main.c init.c add.c commit.c -lssl -lcrypto -Wall -Wextra -o jit
+```
+
+---
+
+## Status of commands:
+```
+jit init      ✅
+jit add       ✅
+jit commit    ✅
+jit status    → in progress
+```
+
+---
+
+*Last updated: February 2026*
