@@ -1713,3 +1713,377 @@ jit status    → in progress
 ---
 
 *Last updated: February 2026*
+
+# Jit — Day 5 Progress
+### jit status — Comparison 1 complete + bug hunting
+
+---
+
+## Table of Contents
+1. [What we built today](#built)
+2. [jit status — Comparison 1 explained](#comparison1)
+3. [Structs in C — deep dive](#structs)
+4. [The buffer bug — how we found and fixed it](#bug)
+5. [strcspn — stripping newlines](#strcspn)
+6. [The duplicate index bug in add.c](#duplicate)
+7. [Full status.c code so far](#code)
+
+---
+
+## 1. What we built today <a name="built"></a>
+
+Completed **Comparison 1** of `jit status` — detecting files that have been **modified but not staged**.
+
+Also fixed a critical bug in `add.c` where adding the same file twice would create duplicate entries in the index.
+
+**Verified working:**
+```bash
+$ ./jit add main.c
+$ # modify main.c
+$ ./jit status
+ Modified unstaged:
+     main.c
+
+$ ./jit add main.c   # re-stage the file
+$ ./jit status
+                     # clean, nothing shown
+```
+
+---
+
+## 2. jit status — Comparison 1 explained <a name="comparison1"></a>
+
+### What comparison 1 does:
+Compares the **index** (what was staged) against the **working directory** (what's on disk right now).
+
+### The logic:
+```
+for each entry in index:
+    read the file from disk
+    hash it
+    compare with stored hash in index
+
+    if file doesn't exist on disk → deleted not staged
+    if hashes differ              → modified not staged
+    if hashes match               → clean, nothing to report
+```
+
+### Why this works:
+When you do `jit add file.c`, the hash of the file at that moment gets stored in the index. If you then modify the file, its contents change, so its hash changes. When status reads the file from disk and hashes it again, it gets a different hash — mismatch detected!
+
+### Step by step in code:
+1. Open `.jit/index` and read line by line with `fgets()`
+2. Extract hash from first 40 characters of each line using `strncpy()`
+3. Extract filename from position 41 onwards using `strcpy(line + 41)`
+4. Strip the newline from filename using `strcspn()`
+5. Store both in a struct
+6. Open the actual file from disk using `fopen(filename, "r")`
+7. If NULL → file deleted, print message and continue
+8. Read file contents with `fread()` into a buffer
+9. Hash the contents with `SHA1()` via `calc_hashing()`
+10. Compare the two hashes with `strcmp()`
+11. If different → print "Modified unstaged"
+
+---
+
+## 3. Structs in C — deep dive <a name="structs"></a>
+
+### What is a struct?
+A struct is a way to group related data together under one name. Like a custom data type you define yourself.
+
+```c
+struct file_and_hash {
+    char filename[1024];
+    char hash[41];
+};
+```
+
+This creates a type called `file_and_hash` that holds both a filename and its hash together as one unit.
+
+### Declaring and using a struct:
+```c
+// declare a single struct variable
+struct file_and_hash f;
+
+// access fields with dot notation
+strcpy(f.filename, "main.c");
+strcpy(f.hash, "4884b6c315...");
+
+// read fields
+printf("%s", f.filename);
+printf("%s", f.hash);
+```
+
+### Array of structs:
+You can have an array where each element is a struct — perfect for storing multiple index entries:
+
+```c
+struct file_and_hash entries[100];
+int count = 0;
+
+// add an entry
+strcpy(entries[count].filename, "main.c");
+strcpy(entries[count].hash, "4884b6...");
+count++;
+
+// access entries
+for (int k = 0; k < count; k++) {
+    printf("%s %s\n", entries[k].hash, entries[k].filename);
+}
+```
+
+### Why we used structs here:
+We needed to store multiple index entries in memory simultaneously to:
+1. Check for duplicates in `add.c`
+2. Compare against disk files in `status.c`
+
+Without structs we'd need two separate arrays — one for filenames and one for hashes — and keeping them in sync would be error prone. Structs keep related data together cleanly.
+
+### Struct memory layout:
+```
+entries[0]: [filename: "main.c\0..."][hash: "4884b6...\0"]
+entries[1]: [filename: "add.c\0..." ][hash: "9f3a21...\0"]
+entries[2]: [filename: "commit.c\0."][hash: "7f3a9b...\0"]
+```
+
+Each element in the array contains its own copy of both fields. Total memory per entry = 1024 + 41 = 1065 bytes.
+
+---
+
+## 4. The buffer bug — how we found and fixed it <a name="bug"></a>
+
+### The symptom:
+After modifying `main.c` and running `jit status`, it reported nothing — as if the file hadn't changed at all. Even after appending a line directly with:
+```bash
+echo "// test modification" >> main.c
+```
+Status still showed no difference.
+
+### The debug process:
+Added print statements to compare the two hashes directly:
+```c
+printf("index hash: %s\n", f.hash);
+printf("disk hash:  %s\n", hash);
+```
+
+Output:
+```
+index hash: 25226b34cb0753703182bf56bcd7468c196c40e3
+disk hash:  25226b34cb0753703182bf56bcd7468c196c40e3
+```
+
+Same hash even though the file was modified. That meant the modification wasn't being read at all.
+
+### Root cause:
+```bash
+wc -c main.c
+1177 main.c
+```
+
+`main.c` was **1177 bytes** but the buffer was only **1024 bytes**. `fread` was reading only the first 1024 bytes — the modification appended at the end (bytes 1025-1177) was never read, never hashed.
+
+Both `add.c` and `status.c` were hashing only the first 1024 bytes, so they always produced the same hash regardless of what changed at the end of the file!
+
+### The fix:
+Increase the buffer size in BOTH `add.c` and `status.c` to handle larger files:
+```c
+// before
+char buffer[1024];
+size_t length = fread(buffer, sizeof(char), 1024, fptr);
+
+// after
+char buffer[65536];   // 64KB — handles most source code files
+size_t length = fread(buffer, sizeof(char), 65536, fptr);
+```
+
+**Critical rule learned:** The buffer size and the fread count must ALWAYS match:
+```c
+char buffer[65536];
+fread(buffer, sizeof(char), 65536, fptr);  // read up to 65536 bytes
+//    ^^^^^^                ^^^^^^
+//    must match            must match
+```
+
+If they don't match, you either read more than the buffer can hold (crash/corruption) or read less than the file contains (wrong hash).
+
+### Why 65536?
+64KB (65536 bytes) is a reasonable size for most source code files. Real Git handles this properly using dynamic memory allocation with `malloc()` to read files of any size. For our purposes, 64KB is sufficient.
+
+---
+
+## 5. strcspn — stripping newlines <a name="strcspn"></a>
+
+`fgets()` keeps the `\n` newline character at the end of each line it reads. If you don't strip it, your filename becomes `"main.c\n"` instead of `"main.c"` — and `fopen("main.c\n", "r")` will fail to find the file!
+
+### The fix:
+```c
+filename[strcspn(filename, "\n")] = '\0';
+```
+
+### How strcspn works:
+`strcspn(str, chars)` returns the index of the first character in `str` that matches any character in `chars`. So:
+
+```c
+char filename[] = "main.c\n";
+strcspn(filename, "\n")  // returns 6 (index of \n)
+filename[6] = '\0';       // replaces \n with null terminator
+// filename is now "main.c"
+```
+
+It's the cleanest one-liner for stripping newlines in C. Always use it after `fgets()` when you need the string without the newline.
+
+---
+
+## 6. The duplicate index bug in add.c <a name="duplicate"></a>
+
+### The bug:
+Running `jit add main.c` twice would create two entries in the index:
+```
+25226b34... main.c
+25226b34... main.c
+```
+
+This caused status to process the same file twice and would cause all sorts of confusion later.
+
+### Root cause:
+The original `add.c` always appended to the index with `"a"` mode regardless of whether the file was already there:
+```c
+FILE* index = fopen("./.jit/index", "a");
+fprintf(index, "%s %s\n", hex, arr[i]);
+```
+
+### The fix — read, check, update, rewrite:
+Instead of blindly appending, we now:
+1. Read ALL existing index entries into an array of structs
+2. Search through them for the current filename
+3. If found → update the hash in that entry
+4. If not found → add a new entry at the end
+5. Rewrite the ENTIRE index from scratch with `"w"` mode
+
+```c
+// read all existing entries
+struct file_and_hash entries[100];
+int count = 0;
+FILE* indexRead = fopen("./.jit/index", "r");
+if (indexRead != NULL) {
+    char indexLine[1024];
+    while (fgets(indexLine, sizeof(indexLine), indexRead) != NULL) {
+        strncpy(entries[count].hash, indexLine, 40);
+        entries[count].hash[40] = '\0';
+        strcpy(entries[count].filename, indexLine + 41);
+        entries[count].filename[strcspn(entries[count].filename, "\n")] = '\0';
+        count++;
+    }
+    fclose(indexRead);
+}
+
+// check if file already exists in index
+int found = 0;
+for (int k = 0; k < count; k++) {
+    if (strcmp(entries[k].filename, arr[i]) == 0) {
+        strcpy(entries[k].hash, hex);  // update hash
+        found = 1;
+        break;
+    }
+}
+if (!found) {
+    strcpy(entries[count].hash, hex);      // add new entry
+    strcpy(entries[count].filename, arr[i]);
+    count++;
+}
+
+// rewrite entire index
+FILE* indexWrite = fopen("./.jit/index", "w");
+for (int k = 0; k < count; k++) {
+    fprintf(indexWrite, "%s %s\n", entries[k].hash, entries[k].filename);
+}
+fclose(indexWrite);
+```
+
+---
+
+## 7. Full status.c code so far <a name="code"></a>
+
+```c
+#include <stdio.h>
+#include <string.h>
+#include <openssl/sha.h>
+#include "status.h"
+
+char* calc_hashing(char buffer[], size_t len);
+
+struct file_and_hash {
+    char filename[1024];
+    char hash[41];
+};
+
+void status() {
+
+    // Comparison 1: Working directory vs Index
+    struct file_and_hash f;
+    FILE* fptr = fopen("./.jit/index", "r");
+    if (fptr == NULL) {
+        perror("error opening index");
+        return;
+    }
+    char line[1024];
+    char filename[1024];
+    char hash[41];
+
+    while (fgets(line, 1024, fptr) != NULL) {
+        strncpy(hash, line, 40);
+        hash[40] = '\0';
+
+        strcpy(filename, line + 41);
+        filename[strcspn(filename, "\n")] = '\0';
+
+        strcpy(f.filename, filename);
+        strcpy(f.hash, hash);
+
+        char buffer[65536];
+        FILE* file = fopen(filename, "r");
+        if (file == NULL) {
+            printf("File %s deleted but not staged\n", f.filename);
+            continue;
+        }
+        size_t len = fread(buffer, sizeof(char), 65536, file);
+        fclose(file);
+
+        strcpy(hash, calc_hashing(buffer, len));
+        if (strcmp(f.hash, hash) != 0) {
+            printf("\nModified unstaged:\n\t%s\n", f.filename);
+        }
+    }
+    fclose(fptr);
+
+    // Comparison 2: Index vs Last Commit Tree — coming next
+    // Comparison 3: Untracked files — coming next
+}
+
+char* calc_hashing(char buffer[], size_t len) {
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1((unsigned char*)buffer, len, hash);
+
+    static char hex[41];
+    for (int j = 0; j < SHA_DIGEST_LENGTH; j++) {
+        sprintf(hex + (j * 2), "%02x", hash[j]);
+    }
+    hex[40] = '\0';
+
+    return hex;
+}
+```
+
+---
+
+## Status of commands:
+```
+jit init      ✅
+jit add       ✅ (duplicate bug fixed)
+jit commit    ✅
+jit status    🔄 comparison 1 done, comparisons 2 and 3 remaining
+```
+
+---
+
+*Last updated: February 2026*
