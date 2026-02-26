@@ -9,4 +9,7 @@ add_executable(jit main.c
         add.c
         add.h
         commit.c
-        commit.h)
+        commit.h
+        status.c
+        status.h
+)
