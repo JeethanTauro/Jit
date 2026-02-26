@@ -11,7 +11,21 @@
 #include <openssl/sha.h>
 #include <sys/stat.h>
 
-void addFile(char *arr[]) {
+struct file_and_hash {
+    char filename[100];
+    char hash[41];
+};
+
+int addFile(char *arr[]) {
+    int successful = 0;
+    //first check if jit is initialised
+    FILE* i = fopen("./.jit/index", "r");
+    if (i == NULL) {
+        perror("failed to open index");
+        return 0;
+    }
+    fclose(i);
+
     //steps:
     //step 1: read the content of the file
     //step 2: store the content of the file in a buffer
@@ -20,15 +34,16 @@ void addFile(char *arr[]) {
     //step 5: create a directory in the objects of the name as the first 2 characters
     //step 6: create a file name in the created directory as the rest of the hashcode and add contents of buffer
     //step 7: update the index file
-    char buffer[1024];
+    char buffer[65536];
     for (int i=0; arr[i] != NULL; i++) {
+
         FILE* fptr = fopen(arr[i], "r");
         if (fptr == NULL) {
             printf("file not found: %s\n", arr[i]);
-            continue;
+            return 0;
         }
 
-        const size_t length = fread(buffer, sizeof(char), 1024, fptr);
+        const size_t length = fread(buffer, sizeof(char), 65536, fptr);
         fclose(fptr);
         unsigned char hash[SHA_DIGEST_LENGTH];
         SHA1(buffer, length, hash); //got the hashcode
@@ -60,18 +75,55 @@ void addFile(char *arr[]) {
         FILE* f = fopen(filePath, "w");
         if (f == NULL) {
             perror("failed to create blob");
-            return;
+            return 0;
         }
         fwrite(buffer, 1, length, f); //write the buffer contents to the blob file
         fclose(f);
 
         //updating the index
-        FILE* index = fopen("./.jit/index", "a");
-        if (index == NULL) {
-            perror("failed to open index");
-            return;
+        // read all existing index entries into memory
+        struct file_and_hash entries[100];
+        int count = 0;
+
+        FILE* indexRead = fopen("./.jit/index", "r");
+        if (indexRead != NULL) {
+            char indexLine[1024];
+            while (fgets(indexLine, sizeof(indexLine), indexRead) != NULL) {
+                strncpy(entries[count].hash, indexLine, 40);
+                entries[count].hash[40] = '\0';
+                strcpy(entries[count].filename, indexLine + 41);
+                entries[count].filename[strcspn(entries[count].filename, "\n")] = '\0';
+                count++;
+            }
+            fclose(indexRead);
         }
-        fprintf(index, "%s %s\n", hex, arr[i]);
-        fclose(index);
+
+        // check if filename already exists, update or add
+        int found = 0;
+        for (int k = 0; k < count; k++) {
+            if (strcmp(entries[k].filename, arr[i]) == 0) {
+                strcpy(entries[k].hash, hex);
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            strcpy(entries[count].hash, hex);
+            strcpy(entries[count].filename, arr[i]);
+            count++;
+        }
+
+        // rewrite entire index
+        FILE* indexWrite = fopen("./.jit/index", "w");
+        if (indexWrite == NULL) {
+            perror("failed to open index");
+            return 0;
+        }
+        for (int k = 0; k < count; k++) {
+            fprintf(indexWrite, "%s %s\n", entries[k].hash, entries[k].filename);
+        }
+        fclose(indexWrite);
     }
+    successful = 1;
+    return successful;
 }
