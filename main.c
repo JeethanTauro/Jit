@@ -23,6 +23,7 @@ int main(int argc, char* argv[]) {
         }
         if (addFile(argv + 2)==1) {
             for (int i = 2; i < argc; i++) {
+                //still prints this if there's no modification in the file and we do add, so have to see about it
                 printf("Jit added %s\n", argv[i]);
             }
         }
