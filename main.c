@@ -3,6 +3,7 @@
 #include "init.h"
 #include "add.h"
 #include "commit.h"
+#include  "status.h"
 
 int main(int argc, char* argv[]) {
     //argv[0] is always the file name
@@ -16,14 +17,28 @@ int main(int argc, char* argv[]) {
         printf("\n Jit initialised created \n");
     }
     else if (strcmp(argv[1], "add") == 0) {
-        addFile(argv + 2);
-        for (int i = 2; i < argc; i++) {
-            printf("Jit added %s\n", argv[i]);
+        if (argc < 3) {
+            printf("\nUsage: jit add <filename>\n");
+            return 1;
+        }
+        if (addFile(argv + 2)==1) {
+            for (int i = 2; i < argc; i++) {
+                printf("Jit added %s\n", argv[i]);
+            }
+        }
+
+    }
+    else if (strcmp(argv[1], "commit") == 0) {
+        if (argc < 4) {
+            printf("Usage: jit commit -m \"message\"\n");
+            return 1;
+        }
+        if (commitFile(argv[3])) {
+            printf("\n Jit committed \n");
         }
     }
-    else if (strcmp(argv[1], "commit") == 0 && strcmp(argv[2], "-m") == 0) {
-        commitFile(argv[3]);
-        printf("\n Jit committed \n");
+    else if (strcmp(argv[1],"status")==0) {
+        status();
     }
     else {
         perror("SYNTAX error");
@@ -31,3 +46,4 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+//efw

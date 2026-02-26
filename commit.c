@@ -48,7 +48,15 @@ char* hashing_and_storing(char treeContent[]) {
 
 }
 
-void commitFile(char str[]) {
+int commitFile(char str[]) {
+    int successful = 0;
+    //first see if jit is initialised
+    FILE* i = fopen("./.jit/index", "r");
+    if (i == NULL) {
+        perror("failed to open index");
+        return 0;
+    }
+    fclose(i);
     //step 1 : read the index line by line
     //step 2: build the string with new lines and append the word blob infront of the lines (right now we are handling only files, once we handle subdirectories we would have to append the word tree)
     //step 3: now take the entire string and hash it, and store inside the objects in the same format we did before and then inside the file store the built string (this is the tree hash)
@@ -67,6 +75,7 @@ void commitFile(char str[]) {
     FILE* fptr = fopen("./.jit/index","r");
     if (fptr == NULL) {
         perror("Couldn't open file");
+        return 0;
     }
     char treeContent[4096] = "";
     char line[256];
@@ -97,6 +106,7 @@ void commitFile(char str[]) {
     }
     else {
         fread(parentHash, 1, 41, parentHashFile);
+        fclose(parentHashFile);
     }
 
 
@@ -119,6 +129,7 @@ void commitFile(char str[]) {
     FILE* HeadFile = fopen("./.jit/HEAD", "r");
     if (HeadFile == NULL) {
         perror("Failed to open heads/HEAD");
+        return 0;
     }
     fgets(readLine, sizeof(readLine), HeadFile);
     sscanf(readLine, "ref: refs/heads/%s", branch);
@@ -130,5 +141,6 @@ void commitFile(char str[]) {
     FILE* master = fopen(masterPath, "w");
     fprintf(master, "%s", commitHash);
     fclose(master);
-
+    successful = 1;
+    return successful;
 }

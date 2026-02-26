@@ -4,5 +4,5 @@
 
 #ifndef JIT_COMMIT_H
 #define JIT_COMMIT_H
-void commitFile(char str[]);
+int commitFile(char str[]);
 #endif //JIT_COMMIT_H

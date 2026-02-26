@@ -4,5 +4,5 @@
 
 #ifndef JIT_ADD_H
 #define JIT_ADD_H
-void addFile(char *arr[]);
+int addFile(char *arr[]);
 #endif //JIT_ADD_H
