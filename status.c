@@ -13,7 +13,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <openssl/sha.h>
+#include <dirent.h>
 #include "status.h"
+
+#include <stdlib.h>
 
 char* calc_hashing(char buffer[], size_t len);
 
@@ -22,6 +25,7 @@ struct file_and_hash {
     char hash[41];
 };
 void status() {
+
 
     //Comparison 1 :Working directry and index
     struct file_and_hash f;
@@ -61,8 +65,62 @@ void status() {
             printf("\n Modified unstaged: \n \t %s \n",f.filename);
         }
     }
+    fclose(fptr);
 
+    //untracked files
+    printf("\n Untracked: \n \t \n");
+    fptr = fopen("./.jit/index", "r");
+    int  index_count = 0;
+    char *filenames_in_index[1000];//list of the filenames in th eindex file
+    char *filenames_in_dir[1000];
+    while (fgets(line, 1024, fptr) != NULL) {
+        strcpy(filename,line+41);
+        filename[strcspn(filename, "\n")] = '\0';
+        // filenames_in_index[i++] = filename; this is wrong because after the iteration, all the indexes point to the varibale filename which is wrong
 
+        filenames_in_index[index_count] = malloc(strlen(filename) + 1); // here every filename will return a new address in memory
+        strcpy(filenames_in_index[index_count], filename); //this is correct
+        index_count++;
+    }
+    fclose(fptr);
+    DIR* d;
+    struct dirent* dir; //dir is a pointer to a structure of the type dirent
+    d = opendir(".");
+    int dir_count=0;
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (dir->d_name[0] == '.') {
+                continue;
+            }
+            if (dir->d_type == DT_DIR) continue;
+            filenames_in_dir[dir_count] = malloc(strlen(dir->d_name) + 1);
+            strcpy(filenames_in_dir[dir_count],dir->d_name); //storing the filename which are in the current directory
+            dir_count++;
+        }
+        closedir(d);
+    }
+    //now have to compare these two arrays
+    char *untracked[1000];
+    int untracked_count = 0;
+    for (int i = 0; i < dir_count; i++) {
+        if (strcmp(filenames_in_dir[i], "jit") == 0) continue;
+        int found = 0;
+
+        for (int j = 0; j < index_count; j++) {
+            if (strcmp(filenames_in_dir[i], filenames_in_index[j]) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            untracked[untracked_count] = malloc(strlen(filenames_in_dir[i]) + 1);
+            strcpy(untracked[untracked_count], filenames_in_dir[i]);
+            untracked_count++;
+        }
+    }
+    for (int i=0; i<untracked_count;i++) {
+        printf("\t \n %s",untracked[i]);
+    }
 }
 
 
