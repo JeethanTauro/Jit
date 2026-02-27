@@ -7,46 +7,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
-char* hashing_and_storing(char treeContent[]) {
-    size_t len = strlen(treeContent);
-    //hashing and storing the string
-    unsigned char hash[SHA_DIGEST_LENGTH];
-    SHA1(treeContent, len, hash); //got the hashcode
-
-    //converting to hex
-    static char hex[41]; // 40 chars + null terminator
-    for (int j = 0; j < SHA_DIGEST_LENGTH; j++) {
-        sprintf(hex + (j * 2), "%02x", hash[j]);
-    }
-    hex[40] = '\0'; //final hex hash
-
-    char dir[3];   // 2 chars + null terminator
-    char file[39]; // 38 chars + null terminator
-
-    strncpy(dir, hex, 2);
-    dir[2] = '\0';
-
-    strncpy(file, hex + 2, 38);
-    file[38] = '\0';
-
-    char dirPath[50];
-    char filePath[100];
-
-    //building the file path
-    snprintf(dirPath, sizeof(dirPath), "./.jit/objects/%s", dir);
-    snprintf(filePath, sizeof(filePath), "./.jit/objects/%s/%s", dir, file);
-
-    mkdir(dirPath, 0755);
-    FILE* f = fopen(filePath, "w");
-    if (f == NULL) {
-        perror("failed to create blob");
-    }
-    fwrite(treeContent, 1, len, f); //write the treeContent contents to the blob file
-    fclose(f);
-
-    return hex;
-
-}
+char* hashing_and_storing(char treeContent[]);
 
 int commitFile(char str[]) {
     int successful = 0;
@@ -144,3 +105,45 @@ int commitFile(char str[]) {
     successful = 1;
     return successful;
 }
+
+char* hashing_and_storing(char treeContent[]) {
+    size_t len = strlen(treeContent);
+    //hashing and storing the string
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1(treeContent, len, hash); //got the hashcode
+
+    //converting to hex
+    static char hex[41]; // 40 chars + null terminator
+    for (int j = 0; j < SHA_DIGEST_LENGTH; j++) {
+        sprintf(hex + (j * 2), "%02x", hash[j]);
+    }
+    hex[40] = '\0'; //final hex hash
+
+    char dir[3];   // 2 chars + null terminator
+    char file[39]; // 38 chars + null terminator
+
+    strncpy(dir, hex, 2);
+    dir[2] = '\0';
+
+    strncpy(file, hex + 2, 38);
+    file[38] = '\0';
+
+    char dirPath[50];
+    char filePath[100];
+
+    //building the file path
+    snprintf(dirPath, sizeof(dirPath), "./.jit/objects/%s", dir);
+    snprintf(filePath, sizeof(filePath), "./.jit/objects/%s/%s", dir, file);
+
+    mkdir(dirPath, 0755);
+    FILE* f = fopen(filePath, "w");
+    if (f == NULL) {
+        perror("failed to create blob");
+    }
+    fwrite(treeContent, 1, len, f); //write the treeContent contents to the blob file
+    fclose(f);
+
+    return hex;
+
+}
+
