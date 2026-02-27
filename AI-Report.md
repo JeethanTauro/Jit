@@ -2675,3 +2675,165 @@ jit status    ✅  — fully complete
 ---
 
 *Last updated: February 2026*
+
+# Jit — Day 7 Progress
+### jit commit — Nothing to commit guard added
+
+---
+
+## What we built today
+
+Added a `check_for_commit()` function that runs before every commit to block it if there is nothing new to save. This makes `jit commit` behave exactly like real Git.
+
+**Verified working:**
+```bash
+$ ./jit commit -m "first commit"
+Nothing to commit, staging area empty   ← blocked ✅
+
+$ ./jit add main.c
+$ ./jit commit -m "first commit"
+Jit committed                           ← allowed ✅
+
+$ ./jit commit -m "second commit"
+Nothing to commit, no modifications made ← blocked ✅
+
+$ # modify main.c
+$ ./jit add main.c
+$ ./jit commit -m "some commit"
+Jit committed                           ← allowed ✅
+```
+
+---
+
+## The check_for_commit() function
+
+A new helper function added to `commit.c` that returns `1` if there is something to commit, `0` if not. Called at the very top of `commitFile()`:
+
+```c
+if (check_for_commit() == 0) return 0;
+```
+
+### Algorithm — step by step:
+
+**Step 1 — Read index into array of structs:**
+```c
+struct file_and_hash index[30];
+int k = 0;
+FILE* i = fopen("./.jit/index", "r");
+while (fgets(line, sizeof(line), i)) {
+    strncpy(index[k].hash, line, 40);
+    index[k].hash[40] = '\0';
+    strcpy(index[k].filename, line + 41);
+    index[k].filename[strcspn(index[k].filename, "\n")] = '\0';
+    k++;
+}
+fclose(i);
+```
+
+**Step 2 — If index is empty, nothing to commit:**
+```c
+if (k == 0) {
+    printf("\nNothing to commit, staging area empty\n");
+    return 0;
+}
+```
+
+**Step 3 — If no previous commits, proceed:**
+```c
+FILE* master = fopen("./.jit/refs/heads/master", "r");
+if (master == NULL) {
+    return 1;  // first commit ever, index has files, go ahead
+}
+```
+
+**Step 4 — Navigate commit → tree object:**
+```c
+// read commit hash from master
+fread(latest_commit, 1, 40, master);
+fclose(master);
+latest_commit[40] = '\0';
+
+// build path to commit object
+strncpy(folder, latest_commit, 2); folder[2] = '\0';
+strncpy(file, latest_commit + 2, 38); file[38] = '\0';
+snprintf(tree_hash_path, sizeof(tree_hash_path), "./.jit/objects/%s/%s", folder, file);
+
+// read first line of commit object to get tree hash
+FILE* commit_file = fopen(tree_hash_path, "r");
+fgets(tree_hash, sizeof(tree_hash), commit_file);
+fclose(commit_file);
+tree_hash[strcspn(tree_hash, "\n")] = '\0';
+memmove(tree_hash, tree_hash + 5, strlen(tree_hash + 5) + 1);
+tree_hash[strcspn(tree_hash, " \n")] = '\0';
+
+// build path to tree object
+strncpy(folder, tree_hash, 2); folder[2] = '\0';
+strncpy(file, tree_hash + 2, 38); file[38] = '\0';
+snprintf(commit_path, sizeof(commit_path), "./.jit/objects/%s/%s", folder, file);
+```
+
+**Step 5 — Read tree object entries into structs:**
+```c
+struct file_and_hash tree[30];
+int tree_count = 0;
+FILE* tree_file = fopen(commit_path, "r");
+while (fgets(line, 1024, tree_file) != NULL) {
+    strncpy(tree[tree_count].hash, line + 5, 40);
+    tree[tree_count].hash[40] = '\0';
+    strcpy(tree[tree_count].filename, line + 46);
+    tree[tree_count].filename[strcspn(tree[tree_count].filename, "\n")] = '\0';
+    tree_count++;
+}
+fclose(tree_file);
+```
+
+**Step 6 — Compare index vs tree, count differences:**
+```c
+int changes = 0;
+for (int i = 0; i < k; i++) {
+    int found = 0;
+    for (int j = 0; j < tree_count; j++) {
+        if (strcmp(index[i].filename, tree[j].filename) == 0) {
+            found = 1;
+            if (strcmp(index[i].hash, tree[j].hash) != 0) {
+                changes++;  // same file, different hash → modified
+            }
+            break;
+        }
+    }
+    if (!found) {
+        changes++;  // file in index but not in tree → new file
+    }
+}
+```
+
+**Step 7 — Block or allow based on changes count:**
+```c
+if (changes == 0) {
+    printf("\nNothing to commit, no modifications made\n");
+    return 0;
+}
+return 1;  // changes found, proceed with commit
+```
+
+---
+
+## Why rewrite instead of calling staged_yet_to_commit()?
+
+`staged_yet_to_commit()` in status.c is a **display function** — its job is to print output to the user. `check_for_commit()` is a **logic function** — its job is to return yes or no.
+
+Mixing display logic with commit logic would be bad design. Each function should do exactly one thing. So we rewrote the comparison logic inside commit.c as a clean helper that only returns a value, never prints anything (except the blocking messages).
+
+---
+
+## Status of commands:
+```
+jit init      ✅
+jit add       ✅
+jit commit    ✅  — now blocks empty/duplicate commits
+jit status    ✅
+```
+
+---
+
+*Last updated: February 2026*
