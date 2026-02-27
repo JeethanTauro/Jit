@@ -9,6 +9,17 @@
     // and then check for that file in the disk and hash it
     // if the file doesnt exist, that means the file has been deleted and its not staged
     // if the file exists and the hash is different , that means that file has benn modified and is not staged
+//Comparison 2: tells about untracked files
+    // so if the files are present on the disk but they are not present on the index that means
+    // those files are untracked
+
+//Comparison 3: staged yet to commit
+    // have to read the index files, get the hash and the file name
+    // then check for the latest commit in the current branch (master)
+    // then we go to that commit file and then get the tree hash
+    // then go to that tree objects and read all the content into array of structs (with hash and file name)
+    // now compare the hash of the file with the hash in index, if same nothing to commit, if different then staged and yet to commit
+    // if the file is not present in the array of struct but present in the index that means file has been deleted
 
 #include <stdio.h>
 #include <string.h>
@@ -28,6 +39,7 @@ void status() {
 
 
     //Comparison 1 :Working directry and index
+    //<-----------modified-------------->
     struct file_and_hash f;
     FILE* fptr = fopen("./.jit/index", "r");
     if (fptr == NULL) {
@@ -67,7 +79,7 @@ void status() {
     }
     fclose(fptr);
 
-    //untracked files
+    //<-----------untracked files---------------->
     printf("\n Untracked: \n \t \n");
     fptr = fopen("./.jit/index", "r");
     int  index_count = 0;
@@ -121,6 +133,9 @@ void status() {
     for (int i=0; i<untracked_count;i++) {
         printf("\t  %s\n",untracked[i]);
     }
+
+    //<---------staged yet to commit---------->
+
 }
 
 
