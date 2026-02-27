@@ -6,8 +6,12 @@
 #include <openssl/sha.h>
 #include <sys/stat.h>
 #include <time.h>
-
+struct file_and_hash {
+    char filename[1024];
+    char hash[41];
+};
 char* hashing_and_storing(char treeContent[]);
+int check_for_commit();
 
 int commitFile(char str[]) {
     int successful = 0;
@@ -18,6 +22,11 @@ int commitFile(char str[]) {
         return 0;
     }
     fclose(i);
+
+    //also first see if anything is there to commit or not
+    if (check_for_commit() == 0) return 0;
+
+
     //step 1 : read the index line by line
     //step 2: build the string with new lines and append the word blob infront of the lines (right now we are handling only files, once we handle subdirectories we would have to append the word tree)
     //step 3: now take the entire string and hash it, and store inside the objects in the same format we did before and then inside the file store the built string (this is the tree hash)
@@ -147,3 +156,108 @@ char* hashing_and_storing(char treeContent[]) {
 
 }
 
+int check_for_commit() {
+    struct file_and_hash index[30];
+    char line[1024];
+    FILE* i = fopen("./.jit/index", "r");
+    if (i == NULL) {
+        perror("failed to open index");
+    }
+    int k=0;
+    while (fgets(line, sizeof(line), i)) {
+        strncpy(index[k].hash,line,40); //copy the hash into the struct
+        index[k].hash[40] = '\0';
+        strcpy(index[k].filename,line+41); //copy the file name into the struct
+        index[k].filename[strcspn(index[k].filename, "\n")] = '\0'; //replace the new line with \0
+        k++;
+    }
+    fclose(i);
+    if (k==0) {
+        printf("\nNothing to commit, staging area empty\n");
+        return 0;
+    }
+    char latest_commit[41];
+    FILE* master = fopen("./.jit/refs/heads/master", "r");
+    if (master == NULL) {
+         return 1; //first commit so proceed.
+    }
+    fread(latest_commit, 1, 40, master);//reading the latest commit hash
+    fclose(master);
+    latest_commit[40] = '\0';
+
+
+    //building the path to get the tree hash from the commit hash
+    char tree_hash_path[1024];
+    char folder[3];
+    char file[40];
+    strncpy(folder,latest_commit,2); //get the folder name
+    strncpy(file,latest_commit+2,38); //get the filename
+    folder[2] = '\0';
+    file[38] = '\0';
+    snprintf(tree_hash_path,sizeof(tree_hash_path),"./.jit/objects/%s/%s",folder,file); //built the filepath
+
+
+
+    //opening the file to read the tree hash from the commit object
+    char tree_hash[1024];
+    char commit_path[1024];
+    FILE* commit_file = fopen(tree_hash_path,"r");
+    if (commit_file == NULL) {
+        perror("Could not open commit_file");
+    }
+    fgets(tree_hash,sizeof(tree_hash),commit_file); //reading the first line to the the 'tree hash'
+    fclose(commit_file);
+    tree_hash[strcspn(tree_hash, "\n")] = '\0';
+    memmove(tree_hash, tree_hash+5, strlen(tree_hash+5)+1);//overwriting it to get only the tree hash
+    tree_hash[strcspn(tree_hash, " \n")] = '\0';
+
+    //now build the path to the content of the tree its in the form of 'blob hash filename'
+    //we need the hash and the file name
+    strncpy(folder,tree_hash,2);
+    folder[2] = '\0';
+    strncpy(file,tree_hash+2,38);
+    file[38] = '\0';
+    snprintf(commit_path,sizeof(commit_path),"./.jit/objects/%s/%s",folder,file);
+
+    FILE* tree_file = fopen(commit_path,"r");
+    if (tree_file == NULL) {
+        perror("Could not open tree file");
+        return 0;
+    }
+
+    //reading the hash and file name
+    struct file_and_hash tree[30];
+
+    int tree_count =0;
+    while (fgets(line,1024,tree_file) != NULL) {
+        strncpy(tree[tree_count].hash,line+5,40);
+        tree[tree_count].hash[40] = '\0';
+        strcpy(tree[tree_count].filename,line+46);
+        tree[tree_count].filename[strcspn(tree[tree_count].filename, "\n")] = '\0';
+        tree_count++;
+    }
+    fclose(tree_file);
+
+    // compare index vs tree
+    int changes = 0;
+    for (int i = 0; i < k; i++) {
+        int found = 0;
+        for (int j = 0; j < tree_count; j++) {
+            if (strcmp(index[i].filename, tree[j].filename) == 0) {
+                found = 1;
+                if (strcmp(index[i].hash, tree[j].hash) != 0) {
+                    changes++;
+                }
+                break;
+            }
+        }
+        if (!found) {
+           changes++;
+        }
+    }
+    if (changes == 0) {
+        printf("\nNothing to commit, no modifications made\n");
+        return 0;
+    }
+    return 1;
+}
