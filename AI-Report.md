@@ -2087,3 +2087,591 @@ jit status    🔄 comparison 1 done, comparisons 2 and 3 remaining
 ---
 
 *Last updated: February 2026*
+
+# Jit — Day 6 Progress
+### jit status — All Three Comparisons Complete
+
+---
+
+## Table of Contents
+1. [What we completed today](#built6)
+2. [Refactoring into three functions](#refactor)
+3. [Comparison 2 — untracked() in detail](#comparison2)
+4. [Comparison 3 — staged_yet_to_commit() in detail](#comparison3)
+5. [The object chain — navigating commit → tree → blobs](#objectchain)
+6. [memmove vs strcpy — overlapping memory](#memmove)
+7. [malloc and free — dynamic memory](#malloc)
+8. [opendir and readdir — listing directory contents](#opendir)
+9. [The found flag pattern](#foundflag)
+10. [Full final status.c code](#finalcode)
+
+---
+
+## 1. What we completed today <a name="built6"></a>
+
+Completed all three comparisons of `jit status`. The command now behaves like real Git:
+
+```bash
+$ ./jit status
+
+Changes not staged for commit:
+    modified: main.c
+
+Untracked:
+    init.c
+    add.c
+    commit.c
+
+Changes to be committed:
+    new file: status.c
+    modified: main.c
+```
+
+Also refactored the entire status.c into three clean separate functions.
+
+**Commands now complete:**
+```
+jit init      ✅
+jit add       ✅
+jit commit    ✅
+jit status    ✅  — completed today
+```
+
+---
+
+## 2. Refactoring into three functions <a name="refactor"></a>
+
+The original implementation had all three comparisons jammed into one huge `status()` function. We split it into three independent functions:
+
+```c
+void modified();             // comparison 1 — working dir vs index
+void untracked();            // comparison 2 — disk vs index
+void staged_yet_to_commit(); // comparison 3 — index vs last commit tree
+
+void status() {
+    modified();
+    untracked();
+    staged_yet_to_commit();
+}
+```
+
+Benefits:
+- Each function does exactly one thing
+- Easy to debug one comparison without touching others
+- `status()` itself becomes just three lines — a clean high level overview
+- Easy to add or modify one comparison independently
+
+---
+
+## 3. Comparison 2 — untracked() in detail <a name="comparison2"></a>
+
+**Question: what files exist on disk that jit does not know about at all?**
+
+### Algorithm:
+
+**Step 1 — Read all filenames from index into memory:**
+```c
+char *filenames_in_index[1000];
+int index_count = 0;
+
+FILE* fptr = fopen("./.jit/index", "r");
+while (fgets(line, 1024, fptr) != NULL) {
+    strcpy(filename, line + 41);               // extract filename from position 41
+    filename[strcspn(filename, "\n")] = '\0';  // strip newline
+
+    filenames_in_index[index_count] = malloc(strlen(filename) + 1); // fresh memory for each
+    strcpy(filenames_in_index[index_count], filename);
+    index_count++;
+}
+fclose(fptr);
+```
+
+**Step 2 — List all files on disk using opendir/readdir:**
+```c
+char *filenames_in_dir[1000];
+int dir_count = 0;
+
+DIR* d = opendir(".");
+struct dirent* dir;
+while ((dir = readdir(d)) != NULL) {
+    if (dir->d_name[0] == '.') continue;   // skip hidden files and .jit
+    if (dir->d_type == DT_DIR) continue;   // skip directories
+    filenames_in_dir[dir_count] = malloc(strlen(dir->d_name) + 1);
+    strcpy(filenames_in_dir[dir_count], dir->d_name);
+    dir_count++;
+}
+closedir(d);
+```
+
+**Step 3 — Compare using found flag:**
+```c
+for (int i = 0; i < dir_count; i++) {
+    if (strcmp(filenames_in_dir[i], "jit") == 0) continue; // skip executable
+
+    int found = 0;
+    for (int j = 0; j < index_count; j++) {
+        if (strcmp(filenames_in_dir[i], filenames_in_index[j]) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        // file exists on disk but not in index → untracked
+        printf("\t  %s\n", filenames_in_dir[i]);
+    }
+}
+```
+
+**Step 4 — Free all malloc'd memory:**
+```c
+for (int i = 0; i < index_count; i++) free(filenames_in_index[i]);
+for (int i = 0; i < dir_count; i++) free(filenames_in_dir[i]);
+```
+
+---
+
+## 4. Comparison 3 — staged_yet_to_commit() in detail <a name="comparison3"></a>
+
+**Question: what have you staged that has not been committed yet?**
+
+### Algorithm:
+
+**Step 1 — Read all index entries into array of structs:**
+```c
+struct file_and_hash index[30];
+int k = 0;
+
+while (fgets(line, 1024, fptr) != NULL) {
+    strncpy(index[k].hash, line, 40);
+    index[k].hash[40] = '\0';
+    strcpy(index[k].filename, line + 41);
+    index[k].filename[strcspn(index[k].filename, "\n")] = '\0';
+    k++;
+}
+```
+
+**Step 2 — Check if any commits exist:**
+```c
+FILE* master = fopen("./.jit/refs/heads/master", "r");
+if (master == NULL) {
+    // no commits yet — every file in index is new and staged
+    if (k > 0) {
+        printf("\nChanges to be committed:\n");
+        for (int i = 0; i < k; i++) {
+            printf("\t  new file: %s\n", index[i].filename);
+        }
+    }
+    return;
+}
+```
+
+**Step 3 — Read commit hash from master:**
+```c
+char latest_commit[1024];
+fread(latest_commit, 1, 40, master);
+latest_commit[40] = '\0';
+fclose(master);
+```
+
+**Step 4 — Build path to commit object and read tree hash:**
+```c
+char folder[3], file[40];
+strncpy(folder, latest_commit, 2);  folder[2] = '\0';
+strncpy(file, latest_commit + 2, 38);  file[38] = '\0';
+
+char tree_hash_path[1024];
+snprintf(tree_hash_path, sizeof(tree_hash_path), "./.jit/objects/%s/%s", folder, file);
+
+char tree_hash[1024];
+FILE* commit_file = fopen(tree_hash_path, "r");
+fgets(tree_hash, sizeof(tree_hash), commit_file);  // reads "tree xxxxxxxxx"
+fclose(commit_file);
+
+tree_hash[strcspn(tree_hash, "\n")] = '\0';
+memmove(tree_hash, tree_hash + 5, strlen(tree_hash + 5) + 1); // remove "tree " prefix
+tree_hash[strcspn(tree_hash, " \n")] = '\0';
+```
+
+**Step 5 — Build path to tree object and read all blob entries:**
+```c
+strncpy(folder, tree_hash, 2);  folder[2] = '\0';
+strncpy(file, tree_hash + 2, 38);  file[38] = '\0';
+
+char commit_path[1024];
+snprintf(commit_path, sizeof(commit_path), "./.jit/objects/%s/%s", folder, file);
+
+struct file_and_hash tree[30];
+int tree_count = 0;
+FILE* tree_file = fopen(commit_path, "r");
+while (fgets(line, 1024, tree_file) != NULL) {
+    // line format: "blob xxxxxxxxx filename"
+    // blob_ = 5 chars, hash = 40 chars, _ = 1 char, filename at 46
+    strncpy(tree[tree_count].hash, line + 5, 40);
+    tree[tree_count].hash[40] = '\0';
+    strcpy(tree[tree_count].filename, line + 46);
+    tree[tree_count].filename[strcspn(tree[tree_count].filename, "\n")] = '\0';
+    tree_count++;
+}
+fclose(tree_file);
+```
+
+**Step 6 — Compare index against tree:**
+```c
+for (int i = 0; i < k; i++) {
+    int found = 0;
+    for (int j = 0; j < tree_count; j++) {
+        if (strcmp(index[i].filename, tree[j].filename) == 0) {
+            found = 1;
+            if (strcmp(index[i].hash, tree[j].hash) != 0) {
+                // same file but different hash → modified and staged
+                printf("\nChanges to be committed:\n\t  modified: %s\n", index[i].filename);
+            }
+            break;
+        }
+    }
+    if (!found) {
+        // file in index but not in last commit → brand new file staged
+        printf("\nChanges to be committed:\n\t  new file: %s\n", index[i].filename);
+    }
+}
+```
+
+---
+
+## 5. The object chain — navigating commit → tree → blobs <a name="objectchain"></a>
+
+The most complex part of comparison 3 is navigating two levels of objects:
+
+```
+.jit/refs/heads/master
+    contains: e04f5ea4f27d...         ← latest commit hash
+
+.jit/objects/e0/4f5ea4f27d...         ← commit object
+    tree 4eab9de00dc8...              ← first line = tree hash
+    parent none
+    author Jeethan
+    timestamp 1772168490
+    message first commit
+
+.jit/objects/4e/ab9de00dc8...         ← tree object
+    blob 80722e96... main.c           ← one line per staged file
+    blob 9f3a21bc... status.c
+```
+
+Two hops to get to the actual file hashes:
+1. Read master → get commit hash → open commit object → read tree hash
+2. Open tree object → read all blob entries → now you have hashes and filenames to compare
+
+---
+
+## 6. memmove vs strcpy — overlapping memory <a name="memmove"></a>
+
+When extracting the tree hash from `"tree xxxxxxxxx"`, we need to shift the string left by 5 characters. The wrong way:
+
+```c
+strcpy(tree_hash, tree_hash + 5);  // WRONG — source and dest overlap!
+```
+
+`strcpy` is not designed for overlapping memory. When source and destination are in the same buffer, it can corrupt the data silently — no error, no warning, just wrong output.
+
+The right way:
+```c
+memmove(tree_hash, tree_hash + 5, strlen(tree_hash + 5) + 1);  // CORRECT
+```
+
+`memmove` handles overlapping memory correctly by copying through a temporary buffer internally. Always use `memmove` when source and destination might overlap.
+
+```
+before: tree_hash = "tree 4eab9de00dc8..."
+                          ↑
+                          tree_hash + 5
+
+after memmove:  tree_hash = "4eab9de00dc8..."
+```
+
+---
+
+## 7. malloc and free — dynamic memory <a name="malloc"></a>
+
+For the untracked comparison we needed to store many filenames in separate memory locations. The naive approach fails:
+
+```c
+// WRONG — all entries point to the same buffer:
+char filename[1024];
+filenames_in_index[i] = filename;  // every entry points to same address!
+// after loop: all entries contain the LAST filename only
+```
+
+The correct approach uses `malloc` to allocate fresh memory for each string:
+
+```c
+// CORRECT — each entry gets its own unique memory:
+filenames_in_index[i] = malloc(strlen(filename) + 1);  // allocate exact size needed
+strcpy(filenames_in_index[i], filename);                // copy into fresh memory
+```
+
+`malloc(n)` allocates n bytes of memory on the heap and returns a pointer to it. Each call returns a different address.
+
+**Every malloc must be paired with a free:**
+```c
+// after you're done with the data:
+for (int i = 0; i < index_count; i++) free(filenames_in_index[i]);
+```
+
+Not freeing is called a memory leak. The memory stays allocated even after you're done with it.
+
+---
+
+## 8. opendir and readdir — listing directory contents <a name="opendir"></a>
+
+From `#include <dirent.h>`. Used to list files in a directory, like `ls` on the terminal.
+
+```c
+DIR* d = opendir(".");          // open current directory
+struct dirent* dir;             // pointer to directory entry
+
+while ((dir = readdir(d)) != NULL) {
+    dir->d_name    // filename as string
+    dir->d_type    // type: DT_REG = regular file, DT_DIR = directory
+}
+closedir(d);
+```
+
+**Filters we applied:**
+```c
+if (dir->d_name[0] == '.') continue;  // skip .jit, ., .. and hidden files
+if (dir->d_type == DT_DIR) continue;  // skip directories like cmake-build-debug
+if (strcmp(dir->d_name, "jit") == 0) continue;  // skip our own executable
+```
+
+---
+
+## 9. The found flag pattern <a name="foundflag"></a>
+
+Used consistently across all three comparisons. The idea: loop through a list looking for a match, set a flag if found, check the flag after the loop.
+
+```c
+int found = 0;
+for (int j = 0; j < count; j++) {
+    if (strcmp(a[i], b[j]) == 0) {
+        found = 1;
+        break;  // stop searching once found
+    }
+}
+if (!found) {
+    // item was not in the list
+}
+```
+
+This pattern appears in:
+- `add.c` — checking if file already exists in index before updating
+- `untracked()` — checking if disk file exists in index
+- `staged_yet_to_commit()` — checking if index file exists in last commit tree
+
+---
+
+## 10. Full final status.c code <a name="finalcode"></a>
+
+```c
+#include 
+#include 
+#include <openssl/sha.h>
+#include 
+#include 
+#include "status.h"
+
+char* calc_hashing(char buffer[], size_t len);
+void modified();
+void untracked();
+void staged_yet_to_commit();
+
+struct file_and_hash {
+    char filename[1024];
+    char hash[41];
+};
+
+void status() {
+    modified();
+    untracked();
+    staged_yet_to_commit();
+}
+
+void modified() {
+    struct file_and_hash f;
+    FILE* fptr = fopen("./.jit/index", "r");
+    if (fptr == NULL) { perror("error opening index"); return; }
+    char line[1024], filename[1024], hash[41];
+
+    while (fgets(line, 1024, fptr) != NULL) {
+        strncpy(hash, line, 40);
+        hash[40] = '\0';
+        strcpy(filename, line + 41);
+        filename[strcspn(filename, "\n")] = '\0';
+        strcpy(f.filename, filename);
+        strcpy(f.hash, hash);
+
+        char buffer[65536];
+        FILE* file = fopen(filename, "r");
+        if (file == NULL) {
+            printf("File %s deleted but not staged\n", f.filename);
+            continue;
+        }
+        size_t len = fread(buffer, sizeof(char), 65536, file);
+        fclose(file);
+        strcpy(hash, calc_hashing(buffer, len));
+        if (strcmp(f.hash, hash) != 0) {
+            printf("\nChanges not staged for commit:\n\t  modified: %s\n", f.filename);
+        }
+    }
+    fclose(fptr);
+}
+
+void untracked() {
+    FILE* fptr = fopen("./.jit/index", "r");
+    char line[1024], filename[1024];
+    printf("\nUntracked files:\n");
+    int index_count = 0, dir_count = 0;
+    char *filenames_in_index[1000], *filenames_in_dir[1000];
+
+    while (fgets(line, 1024, fptr) != NULL) {
+        strcpy(filename, line + 41);
+        filename[strcspn(filename, "\n")] = '\0';
+        filenames_in_index[index_count] = malloc(strlen(filename) + 1);
+        strcpy(filenames_in_index[index_count], filename);
+        index_count++;
+    }
+    fclose(fptr);
+
+    DIR* d = opendir(".");
+    struct dirent* dir;
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (dir->d_name[0] == '.') continue;
+            if (dir->d_type == DT_DIR) continue;
+            filenames_in_dir[dir_count] = malloc(strlen(dir->d_name) + 1);
+            strcpy(filenames_in_dir[dir_count], dir->d_name);
+            dir_count++;
+        }
+        closedir(d);
+    }
+
+    char *untracked[1000];
+    int untracked_count = 0;
+    for (int i = 0; i < dir_count; i++) {
+        if (strcmp(filenames_in_dir[i], "jit") == 0) continue;
+        int found = 0;
+        for (int j = 0; j < index_count; j++) {
+            if (strcmp(filenames_in_dir[i], filenames_in_index[j]) == 0) {
+                found = 1; break;
+            }
+        }
+        if (!found) {
+            untracked[untracked_count] = malloc(strlen(filenames_in_dir[i]) + 1);
+            strcpy(untracked[untracked_count], filenames_in_dir[i]);
+            untracked_count++;
+        }
+    }
+    for (int i = 0; i < untracked_count; i++) {
+        printf("\t  %s\n", untracked[i]);
+        free(untracked[i]);
+    }
+    for (int i = 0; i < index_count; i++) free(filenames_in_index[i]);
+    for (int i = 0; i < dir_count; i++) free(filenames_in_dir[i]);
+}
+
+void staged_yet_to_commit() {
+    FILE* fptr = fopen("./.jit/index", "r");
+    char line[1024];
+    struct file_and_hash index[30];
+    int k = 0;
+    while (fgets(line, 1024, fptr) != NULL) {
+        strncpy(index[k].hash, line, 40);
+        index[k].hash[40] = '\0';
+        strcpy(index[k].filename, line + 41);
+        index[k].filename[strcspn(index[k].filename, "\n")] = '\0';
+        k++;
+    }
+    fclose(fptr);
+
+    FILE* master = fopen("./.jit/refs/heads/master", "r");
+    if (master == NULL) {
+        if (k > 0) {
+            printf("\nChanges to be committed:\n");
+            for (int i = 0; i < k; i++)
+                printf("\t  new file: %s\n", index[i].filename);
+        }
+        return;
+    }
+    char latest_commit[1024];
+    fread(latest_commit, 1, 40, master);
+    fclose(master);
+    latest_commit[40] = '\0';
+
+    char folder[3], file[40], tree_hash_path[1024];
+    strncpy(folder, latest_commit, 2); folder[2] = '\0';
+    strncpy(file, latest_commit + 2, 38); file[38] = '\0';
+    snprintf(tree_hash_path, sizeof(tree_hash_path), "./.jit/objects/%s/%s", folder, file);
+
+    char tree_hash[1024], commit_path[1024];
+    FILE* commit_file = fopen(tree_hash_path, "r");
+    fgets(tree_hash, sizeof(tree_hash), commit_file);
+    fclose(commit_file);
+    tree_hash[strcspn(tree_hash, "\n")] = '\0';
+    memmove(tree_hash, tree_hash + 5, strlen(tree_hash + 5) + 1);
+    tree_hash[strcspn(tree_hash, " \n")] = '\0';
+
+    strncpy(folder, tree_hash, 2); folder[2] = '\0';
+    strncpy(file, tree_hash + 2, 38); file[38] = '\0';
+    snprintf(commit_path, sizeof(commit_path), "./.jit/objects/%s/%s", folder, file);
+
+    struct file_and_hash tree[30];
+    int tree_count = 0;
+    FILE* tree_file = fopen(commit_path, "r");
+    while (fgets(line, 1024, tree_file) != NULL) {
+        strncpy(tree[tree_count].hash, line + 5, 40);
+        tree[tree_count].hash[40] = '\0';
+        strcpy(tree[tree_count].filename, line + 46);
+        tree[tree_count].filename[strcspn(tree[tree_count].filename, "\n")] = '\0';
+        tree_count++;
+    }
+    fclose(tree_file);
+
+    for (int i = 0; i < k; i++) {
+        int found = 0;
+        for (int j = 0; j < tree_count; j++) {
+            if (strcmp(index[i].filename, tree[j].filename) == 0) {
+                found = 1;
+                if (strcmp(index[i].hash, tree[j].hash) != 0)
+                    printf("\nChanges to be committed:\n\t  modified: %s\n", index[i].filename);
+                break;
+            }
+        }
+        if (!found)
+            printf("\nChanges to be committed:\n\t  new file: %s\n", index[i].filename);
+    }
+}
+
+char* calc_hashing(char buffer[], size_t len) {
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1((unsigned char*)buffer, len, hash);
+    static char hex[41];
+    for (int j = 0; j < SHA_DIGEST_LENGTH; j++)
+        sprintf(hex + (j * 2), "%02x", hash[j]);
+    hex[40] = '\0';
+    return hex;
+}
+```
+
+---
+
+## Status of commands:
+```
+jit init      ✅
+jit add       ✅
+jit commit    ✅
+jit status    ✅  — fully complete
+```
+
+---
+
+*Last updated: February 2026*
