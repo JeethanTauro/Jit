@@ -30,6 +30,10 @@
 #include <stdlib.h>
 
 char* calc_hashing(char buffer[], size_t len);
+void modified();
+void untracked();
+void staged_yet_to_commit();
+
 
 struct file_and_hash {
     char filename[1024];
@@ -40,6 +44,16 @@ void status() {
 
     //Comparison 1 :Working directry and index
     //<-----------modified-------------->
+    modified();
+
+    //<-----------untracked files---------------->
+    untracked();
+
+    //<---------staged yet to commit---------->
+    staged_yet_to_commit();
+}
+
+void modified() {
     struct file_and_hash f;
     FILE* fptr = fopen("./.jit/index", "r");
     if (fptr == NULL) {
@@ -74,14 +88,19 @@ void status() {
         //get the hash of the file
         strcpy(hash,calc_hashing(buffer, len));
         if (strcmp(f.hash,hash) != 0) {
-            printf("\n Modified unstaged: \n \t %s \n",f.filename);
+            printf("\nChanges not staged for commit:\n\t  modified: %s\n",f.filename);
         }
     }
     fclose(fptr);
-
-    //<-----------untracked files---------------->
+}
+void untracked() {
+    FILE* fptr = fopen("./.jit/index", "r");
+    if (fptr == NULL) {
+        perror("error opening index");
+    }
+    char line[1024];
+    char filename[1024];
     printf("\n Untracked: \n \t \n");
-    fptr = fopen("./.jit/index", "r");
     int  index_count = 0;
     char *filenames_in_index[1000];//list of the filenames in th eindex file
     char *filenames_in_dir[1000];
@@ -130,15 +149,20 @@ void status() {
             untracked_count++;
         }
     }
+    //freeing the allocated memory
     for (int i=0; i<untracked_count;i++) {
         printf("\t  %s\n",untracked[i]);
+        free(untracked[i]); // Free untracked
     }
-
-    //<---------staged yet to commit---------->
-    fptr = fopen("./.jit/index", "r");
+    for (int i = 0; i < index_count; i++) free(filenames_in_index[i]);
+    for (int i = 0; i < dir_count; i++) free(filenames_in_dir[i]);
+}
+void staged_yet_to_commit() {
+    FILE* fptr = fopen("./.jit/index", "r");
     if (fptr == NULL) {
-        perror("Could not open index");
+        perror("error opening index");
     }
+    char line[1024];
     struct file_and_hash index[30];
     int k=0;
     while (fgets(line,1024,fptr)!= NULL) {
@@ -152,9 +176,11 @@ void status() {
     char latest_commit[1024];
     FILE* master = fopen("./.jit/refs/heads/master", "r");
     if (master == NULL) {
-        //all files which are in the index are yet to be commited
-        for (int i = 0; i < k; i++) {
-            printf("\nNew file staged:\n\t%s\n", index[i].filename);
+        if (k > 0) {
+            printf("\nChanges to be committed:\n");
+            for (int i = 0; i < k; i++) {
+                printf("\t  %s\n", index[i].filename);
+            }
         }
         return;
     }
@@ -222,20 +248,16 @@ void status() {
             if (strcmp(index[i].filename, tree[j].filename) == 0) {
                 found = 1;
                 if (strcmp(index[i].hash, tree[j].hash) != 0) {
-                    printf("\nModified staged:\n\t%s\n", index[i].filename);
+                    printf("\nChanges to be committed:\n\t  modified: %s\n", index[i].filename);
                 }
                 break;
             }
         }
         if (!found) {
-            printf("\nNew file staged:\n\t%s\n", index[i].filename);
+            printf("\nChanges to be committed:\n\t  new file: %s\n", index[i].filename);
         }
     }
-
-
 }
-
-
 char* calc_hashing(char buffer[] ,size_t len) {
     //hashing and storing the string
     unsigned char hash[SHA_DIGEST_LENGTH];
