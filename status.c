@@ -119,7 +119,7 @@ void status() {
         }
     }
     for (int i=0; i<untracked_count;i++) {
-        printf("\t \n %s",untracked[i]);
+        printf("\t  %s\n",untracked[i]);
     }
 }
 
