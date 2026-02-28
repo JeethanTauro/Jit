@@ -2837,3 +2837,323 @@ jit status    ✅
 ---
 
 *Last updated: February 2026*
+
+---
+---
+
+# Jit — Day 8 Progress
+### jit log — Complete Implementation
+
+---
+
+## Table of Contents
+1. [What we built today](#built8)
+2. [How jit log works — the algorithm](#algorithm)
+3. [The full traversal loop](#loop)
+4. [Formatting the timestamp](#timestamp)
+5. [Bugs we hit](#bugs)
+6. [New C functions learned](#functions)
+7. [Full log.c code](#code)
+
+---
+
+## 1. What we built today <a name="built8"></a>
+
+Implemented `jit log` — traverses the full commit chain from latest commit back
+to the very first one, printing each commit's details with a formatted date.
+
+**Verified output:**
+```bash
+$ ./jit log
+ tree 52f0a7c8748e...
+ parent 016b3dae3b0b...
+ author Jeethan
+ date: Sat Feb 28 09:53:47 2026
+ message new commit
+--------------------------------------------------------
+ tree 4c5545dcd870...
+ parent a924fa3a850e...
+ author Jeethan
+ date: Fri Feb 27 15:36:27 2026
+ message some commit
+--------------------------------------------------------
+ tree 8ac9400052f1...
+ parent none
+ author Jeethan
+ date: Fri Feb 27 15:35:13 2026
+ message first commit
+--------------------------------------------------------
+```
+
+**Commands now complete:**
+```
+jit init      ✅
+jit add       ✅
+jit commit    ✅
+jit status    ✅
+jit log       ✅  — completed today
+```
+
+---
+
+## 2. How jit log works — the algorithm <a name="algorithm"></a>
+
+Git's commit history is a linked list. Each commit object contains the hash of
+its parent commit. To traverse the full history you just follow the chain:
+```
+latest commit
+    ↓ parent hash
+second commit
+    ↓ parent hash
+first commit
+    ↓ parent = "none"
+    stop
+```
+
+**Step by step:**
+
+1. Open `.jit/refs/heads/master` and read the latest commit hash
+2. Build the path to that commit object using the hash
+3. Open the commit object and read all its lines
+4. While reading, detect the `parent` line and extract the parent hash
+5. Print the commit details (with formatted date)
+6. Set `current_hash` to the parent hash
+7. If `current_hash` is `"none"` — stop, we've reached the first commit
+8. Otherwise loop back to step 2 with the new hash
+
+---
+
+## 3. The full traversal loop <a name="loop"></a>
+```c
+void jit_log() {
+    char current_hash[41];
+    FILE* master = fopen("./.jit/refs/heads/master", "r");
+    if (master == NULL) {
+        perror("Couldn't open master");
+        return;
+    }
+    fread(current_hash, 1, 40, master);
+    current_hash[40] = '\0';  // CRITICAL — always null terminate after fread
+    fclose(master);
+
+    char folder[3], filename[40], commit_file_path[1024], line[1024];
+
+    while (strcmp(current_hash, "none") != 0) {
+        int line_count = 0;  // reset for every commit
+
+        // build path to commit object
+        strncpy(folder, current_hash, 2);
+        folder[2] = '\0';
+        strcpy(filename, current_hash + 2);
+        filename[strcspn(filename, "\n")] = '\0';
+        snprintf(commit_file_path, sizeof(commit_file_path),
+                 "./.jit/objects/%s/%s", folder, filename);
+
+        FILE* commit_file = fopen(commit_file_path, "r");
+        if (commit_file == NULL) {
+            perror("Couldn't open commit file");
+            return;
+        }
+
+        // read and print each line
+        while (fgets(line, sizeof(line), commit_file) != NULL) {
+            line_count++;
+
+            if (line_count == 2) {
+                // line 2 is "parent xxxx" — extract for next iteration
+                strncpy(current_hash, line + 7, 40);
+                current_hash[40] = '\0';
+                current_hash[strcspn(current_hash, "\n")] = '\0';
+            }
+
+            if (strncmp(line, "timestamp", 9) == 0) {
+                // format timestamp into readable date
+                time_t t = atol(line + 10);
+                struct tm* tm_info = localtime(&t);
+                char date[64];
+                strftime(date, sizeof(date), "%a %b %d %H:%M:%S %Y", tm_info);
+                printf("\n date: %s\n", date);
+            } else {
+                printf("\n %s", line);
+            }
+        }
+        fclose(commit_file);
+        printf("--------------------------------------------------------\n");
+    }
+}
+```
+
+---
+
+## 4. Formatting the timestamp <a name="timestamp"></a>
+
+Commits store time as a Unix timestamp — an integer counting seconds since
+January 1 1970. For example `1772186787`. We convert it to a readable string
+using three functions from `<time.h>`:
+```c
+#include <time.h>
+#include <stdlib.h>
+
+time_t t = atol(line + 10);          // convert string "1772186787" to integer
+struct tm* tm_info = localtime(&t);  // convert to broken-down local time struct
+char date[64];
+strftime(date, sizeof(date), "%a %b %d %H:%M:%S %Y", tm_info);
+// produces: "Sat Feb 28 09:53:47 2026"
+```
+
+### strftime format codes:
+| Code | Meaning | Example |
+|------|---------|---------|
+| `%a` | Short weekday | Sat |
+| `%b` | Short month | Feb |
+| `%d` | Day of month | 28 |
+| `%H:%M:%S` | Time | 09:53:47 |
+| `%Y` | Full year | 2026 |
+
+---
+
+## 5. Bugs we hit <a name="bugs"></a>
+
+**Bug 1 — Missing null terminator after fread:**
+```c
+fread(current_hash, 1, 40, master);
+// forgot: current_hash[40] = '\0';
+```
+Without the null terminator, `current_hash` contains garbage after the 40
+bytes, causing the path builder to produce a wrong path and fopen to fail.
+
+**Bug 2 — Function name conflict with math library:**
+Named the function `log()` which conflicts with C's built-in `log()` math
+function (calculates logarithm). Clang caught this:
+```
+warning: incompatible redeclaration of library function 'log'
+```
+Fix — rename to `jit_log()` everywhere: log.h, log.c, and main.c.
+
+**Bug 3 — line_count not resetting between commits:**
+Declared `line_count` outside the while loop so it kept incrementing across
+commits. The `if (line_count == 2)` check never triggered for second and
+third commits, meaning the parent hash was never read — infinite loop!
+Fix — declare `int line_count = 0` inside the while loop so it resets
+for every commit.
+
+**Bug 4 — atol needs stdlib.h:**
+`atol()` converts a string to a long integer. It lives in `<stdlib.h>` —
+forgetting the include causes a compile error.
+
+---
+
+## 6. New C functions learned <a name="functions"></a>
+
+### atol()
+Converts a string to a `long` integer. From `<stdlib.h>`:
+```c
+long atol(const char* str);
+
+atol("1772186787")  // returns 1772186787 as a long
+atol("line + 10")   // skips "timestamp " prefix, converts the number
+```
+
+### localtime()
+Converts a Unix timestamp (`time_t`) into a broken-down time struct with
+separate fields for year, month, day, hour, minute, second. From `<time.h>`:
+```c
+time_t t = 1772186787;
+struct tm* tm_info = localtime(&t);
+// tm_info->tm_year, tm_info->tm_mon, tm_info->tm_hour etc.
+```
+
+### strftime()
+Formats a `struct tm` into a human-readable string using format codes.
+From `<time.h>`:
+```c
+char date[64];
+strftime(date, sizeof(date), "%a %b %d %H:%M:%S %Y", tm_info);
+// date is now "Sat Feb 28 09:53:47 2026"
+```
+
+### strncmp()
+Like `strcmp()` but only compares the first `n` characters. Used to detect
+line prefixes without caring about the rest:
+```c
+if (strncmp(line, "timestamp", 9) == 0) {
+    // line starts with "timestamp"
+}
+```
+
+---
+
+## 7. Full log.c code <a name="code"></a>
+```c
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <stdlib.h>
+#include "log.h"
+
+void jit_log() {
+    char current_hash[41];
+    FILE* master = fopen("./.jit/refs/heads/master", "r");
+    if (master == NULL) {
+        perror("Couldn't open master");
+        return;
+    }
+    fread(current_hash, 1, 40, master);
+    current_hash[40] = '\0';
+    fclose(master);
+
+    char folder[3], filename[40], commit_file_path[1024], line[1024];
+
+    while (strcmp(current_hash, "none") != 0) {
+        int line_count = 0;
+
+        strncpy(folder, current_hash, 2);
+        folder[2] = '\0';
+        strcpy(filename, current_hash + 2);
+        filename[strcspn(filename, "\n")] = '\0';
+        snprintf(commit_file_path, sizeof(commit_file_path),
+                 "./.jit/objects/%s/%s", folder, filename);
+
+        FILE* commit_file = fopen(commit_file_path, "r");
+        if (commit_file == NULL) {
+            perror("Couldn't open commit file");
+            return;
+        }
+
+        while (fgets(line, sizeof(line), commit_file) != NULL) {
+            line_count++;
+            if (line_count == 2) {
+                strncpy(current_hash, line + 7, 40);
+                current_hash[40] = '\0';
+                current_hash[strcspn(current_hash, "\n")] = '\0';
+            }
+            if (strncmp(line, "timestamp", 9) == 0) {
+                time_t t = atol(line + 10);
+                struct tm* tm_info = localtime(&t);
+                char date[64];
+                strftime(date, sizeof(date), "%a %b %d %H:%M:%S %Y", tm_info);
+                printf("\n date: %s\n", date);
+            } else {
+                printf("\n %s", line);
+            }
+        }
+        fclose(commit_file);
+        printf("--------------------------------------------------------\n");
+    }
+}
+```
+
+---
+
+## Status of commands:
+```
+jit init      ✅
+jit add       ✅
+jit commit    ✅
+jit status    ✅
+jit log       ✅
+```
+
+---
+
+*Last updated: February 2026*
