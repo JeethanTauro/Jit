@@ -5,6 +5,7 @@
 #include "commit.h"
 #include  "status.h"
 #include "log.h"
+#include "unstage.h"
 
 int main(int argc, char* argv[]) {
     //argv[0] is always the file name
@@ -40,13 +41,26 @@ int main(int argc, char* argv[]) {
         }
     }
     else if (strcmp(argv[1],"status")==0) {
+        if (argc > 2) {
+            printf("\nUsage: jit status\n");
+            return 1;
+        }
         status();
     }
     else if (strcmp(argv[1],"log")==0) {
         jit_log();
     }
+    else if (strcmp(argv[1],"unstage")==0) {
+        if (argc < 3) {
+            printf("usage: jit unstage <filename>\n");
+            return 1;
+        }
+        unstage(argv[2]);
+    }
     else {
-        perror("SYNTAX error");
+        printf("SYNTAX error: unknown command '%s'\n", argv[1]);
+        printf("available commands: init, add, commit, status, log, unstage, reset\n");
+        return 1;
     }
 
     return 0;
