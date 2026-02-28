@@ -3157,3 +3157,132 @@ jit log       ✅
 ---
 
 *Last updated: February 2026*
+
+---
+
+# jit unstage — Implementation
+
+---
+
+## What it does
+Removes a file from the staging area (index) without touching the file on disk.
+The opposite of `jit add`.
+
+**Usage:**
+```bash
+./jit unstage main.c
+```
+
+---
+
+## Algorithm
+
+**Step 1 — Read entire index into array of structs:**
+Open `.jit/index` and read every line into memory. Each line gives you a hash
+and a filename. Store both in a `file_and_hash` struct array.
+
+**Step 2 — Check if the file exists in the index:**
+Loop through the array using the found flag pattern. If the filename doesn't
+match any entry, print an error and return early — don't touch the index.
+
+**Step 3 — Rewrite the index skipping that entry:**
+Open `.jit/index` with `"w"` mode (wipes it clean) and loop through all
+entries. Write every entry EXCEPT the one that matches the filename. That
+entry simply never gets written — it's gone from the index.
+
+---
+
+## The key trick — how the entry gets skipped
+```c
+for (int i = 0; i < count; i++) {
+    if (strcmp(entries[i].filename, filename) != 0) {
+        fprintf(indexWrite, "%s %s\n", entries[i].hash, entries[i].filename);
+    }
+}
+```
+
+Condition is `!= 0` — write everyone who does NOT match. The target entry
+fails the condition and never gets written. Everyone else passes through
+unchanged.
+
+---
+
+## Why the found flag if the loop handles removal?
+
+The found flag is purely for error handling — not for the removal itself.
+Without it, if the user types a filename that doesn't exist in the index:
+- The loop rewrites the index completely unchanged
+- Prints "unstaged: blahblah.c" — lying to the user!
+
+The found flag catches this case and prints an honest error:
+```
+error: blahblah.c not in staging area
+```
+
+---
+
+## Full code
+```c
+void unstage(char* filename) {
+    struct file_and_hash entries[100];
+    int count = 0;
+    char line[1024];
+
+    FILE* indexRead = fopen("./.jit/index", "r");
+    if (indexRead == NULL) {
+        perror("Could not open index");
+        return;
+    }
+    while (fgets(line, sizeof(line), indexRead) != NULL) {
+        strncpy(entries[count].hash, line, 40);
+        entries[count].hash[40] = '\0';
+        strcpy(entries[count].filename, line + 41);
+        entries[count].filename[strcspn(entries[count].filename, "\n")] = '\0';
+        count++;
+    }
+    fclose(indexRead);
+
+    int found = 0;
+    for (int i = 0; i < count; i++) {
+        if (strcmp(entries[i].filename, filename) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        printf("error: %s not in staging area\n", filename);
+        return;
+    }
+
+    FILE* indexWrite = fopen("./.jit/index", "w");
+    if (indexWrite == NULL) {
+        perror("Could not open index");
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        if (strcmp(entries[i].filename, filename) != 0) {
+            fprintf(indexWrite, "%s %s\n", entries[i].hash, entries[i].filename);
+        }
+    }
+    fclose(indexWrite);
+    printf("unstaged: %s\n", filename);
+}
+```
+
+---
+
+## What changes and what doesn't:
+
+| Thing | Changed? |
+|-------|----------|
+| `.jit/index` | ✅ entry removed |
+| `.jit/objects/` | ❌ blob still exists |
+| file on disk | ❌ completely untouched |
+| `.jit/refs/heads/master` | ❌ unchanged |
+
+The blob object for that file still exists in `.jit/objects/` — unstage only
+removes the index entry. If you want to stage it again just run `jit add`!
+
+---
+
+*Last updated: February 2026*
