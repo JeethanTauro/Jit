@@ -10,3 +10,5 @@ build/
 .jit/
 /jit
 todo
+.jitignore
+
