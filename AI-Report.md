@@ -3286,3 +3286,196 @@ removes the index entry. If you want to stage it again just run `jit add`!
 ---
 
 *Last updated: February 2026*
+
+
+---
+
+# jit — .jitignore Implementation
+
+---
+
+## What it does
+Allows the user to create a `.jitignore` file in the project root listing
+filenames they never want to see in the untracked list. Just like `.gitignore`
+in real Git.
+
+**Usage:**
+```bash
+echo "CMakeLists.txt" >> .jitignore
+echo "todo" >> .jitignore
+echo "AI-Report.md" >> .jitignore
+./jit status
+# CMakeLists.txt, todo, AI-Report.md no longer appear in untracked list
+```
+
+---
+
+## Where the code lives
+
+Inside the `untracked()` function in `status.c`. The ignore logic sits in
+two places:
+1. Before the directory reading — read and store ignored filenames
+2. Inside the directory reading loop — check each file against ignore list
+
+---
+
+## Algorithm — step by step
+
+### Part 1 — Reading .jitignore
+
+**Step 1 — Try to open .jitignore:**
+Use `fopen("./.jitignore", "r")`. The key thing here is we check if it returns
+NULL — if it does, the file simply doesn't exist and we skip the whole thing.
+Not having a `.jitignore` is perfectly valid, so no error is printed.
+
+**Step 2 — Set a flag:**
+We use an `int ignore_exists` flag. If the file opened successfully set it to
+1. This flag is used later to avoid looping through an empty array
+   unnecessarily when no `.jitignore` exists.
+
+**Step 3 — Read each line into memory:**
+Use `fgets()` to read line by line. For each line:
+- Strip the newline with `strcspn()`
+- Allocate fresh memory with `malloc(strlen + 1)`
+- Copy the filename into that memory with `strcpy()`
+- Increment `ignore_count`
+
+At the end of this you have an array of strings — every filename that should
+be ignored.
+
+---
+
+### Part 2 — Checking files against the ignore list
+
+This happens inside the `readdir()` loop where we collect files from disk.
+For each file found on disk we do three checks before adding it to
+`filenames_in_dir`:
+
+**Check 1 — skip hidden files:**
+```
+if first char is '.' → skip
+```
+
+**Check 2 — skip directories:**
+```
+if d_type is DT_DIR → skip
+```
+
+**Check 3 — skip ignored files (new!):**
+```
+if ignore_exists:
+    loop through ignore_filenames
+    if match found → set ignored = 1, break
+if ignored → skip
+```
+
+Only if all three checks pass does the file get added to `filenames_in_dir`
+and eventually shown as untracked.
+
+---
+
+## The scoping bug we avoided
+
+The naive approach would be:
+```c
+for (int i = 0; i < ignore_count; i++) {
+    if (strcmp(dir->d_name, ignore_filenames[i]) == 0) {
+        continue;  // WRONG — continues the for loop not the while loop!
+    }
+}
+```
+
+`continue` inside a nested loop only skips to the next iteration of the
+INNERMOST loop it lives in. So even if a match was found, the file would
+still get added to `filenames_in_dir` after the for loop finished.
+
+The correct approach is the found flag pattern — break out of the inner loop
+with a flag, then check the flag in the outer loop:
+```c
+int ignored = 0;
+for (int i = 0; i < ignore_count; i++) {
+    if (strcmp(dir->d_name, ignore_filenames[i]) == 0) {
+        ignored = 1;
+        break;  // stop searching, we found a match
+    }
+}
+if (ignored) continue;  // THIS continue skips the while loop iteration
+```
+
+---
+
+## Memory management
+
+Just like `filenames_in_index` and `filenames_in_dir`, the ignore filenames
+are malloc'd and must be freed after use:
+```c
+for (int i = 0; i < ignore_count; i++) free(ignore_filenames[i]);
+```
+
+---
+
+## What the ignore check does NOT affect
+
+| Thing | Affected by .jitignore? |
+|-------|------------------------|
+| Untracked list in status | ✅ yes — ignored files hidden |
+| jit add | ❌ no — can still add ignored files |
+| jit commit | ❌ no |
+| jit log | ❌ no |
+| .jit/objects | ❌ no |
+
+The ignore only affects what gets SHOWN as untracked. A future improvement
+would be to also block `jit add` from staging ignored files unless forced.
+
+---
+
+## Full implementation
+```c
+// declarations
+char *ignore_filenames[100];
+int ignore_exists = 0;
+char ignore_line_content[1024];
+int ignore_count = 0;
+
+// read .jitignore if it exists
+FILE* ignore_file = fopen("./.jitignore", "r");
+if (ignore_file != NULL) {
+    ignore_exists = 1;
+    while (fgets(ignore_line_content, sizeof(ignore_line_content), ignore_file) != NULL) {
+        ignore_line_content[strcspn(ignore_line_content, "\n")] = '\0';
+        ignore_filenames[ignore_count] = malloc(strlen(ignore_line_content) + 1);
+        strcpy(ignore_filenames[ignore_count], ignore_line_content);
+        ignore_count++;
+    }
+    fclose(ignore_file);
+}
+
+// inside readdir loop
+while ((dir = readdir(d)) != NULL) {
+    if (dir->d_name[0] == '.') continue;
+    if (dir->d_type == DT_DIR) continue;
+
+    int ignored = 0;
+    if (ignore_exists) {
+        for (int i = 0; i < ignore_count; i++) {
+            if (strcmp(dir->d_name, ignore_filenames[i]) == 0) {
+                ignored = 1;
+                break;
+            }
+        }
+    }
+    if (ignored) continue;
+
+    filenames_in_dir[dir_count] = malloc(strlen(dir->d_name) + 1);
+    strcpy(filenames_in_dir[dir_count], dir->d_name);
+    dir_count++;
+}
+closedir(d);
+
+// free ignore memory
+for (int i = 0; i < ignore_count; i++) free(ignore_filenames[i]);
+```
+
+---
+
+*Last updated: February 2026*
