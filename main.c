@@ -6,6 +6,8 @@
 #include  "status.h"
 #include "log.h"
 #include "unstage.h"
+#include "branch.h"
+#include "delete_branch.h"
 
 int main(int argc, char* argv[]) {
     //argv[0] is always the file name
@@ -56,6 +58,18 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         unstage(argv[2]);
+    }
+    else if (strcmp(argv[1], "branch") == 0) {
+        if (argc == 3) {
+            branch(argv[2]);
+        }
+        else if (argc == 4 && strcmp(argv[2], "-d") == 0) {
+            delete_branch(argv[3]);  // argv[3] is the branch name!
+        }
+        else {
+            printf("usage: jit branch <name>\n");
+            printf("       jit branch -d <name>\n");
+        }
     }
     else {
         printf("SYNTAX error: unknown command '%s'\n", argv[1]);

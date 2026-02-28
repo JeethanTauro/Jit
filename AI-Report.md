@@ -3479,3 +3479,279 @@ for (int i = 0; i < ignore_count; i++) free(ignore_filenames[i]);
 ---
 
 *Last updated: February 2026*
+
+---
+
+# jit branch — Create and Delete Branches
+
+---
+
+## What it does
+Creates and deletes branches. A branch in jit is simply a file inside
+`.jit/refs/heads/` containing a commit hash. Nothing more.
+
+**Usage:**
+```bash
+./jit branch feature1      # create branch
+./jit branch -d feature1   # delete branch
+```
+
+---
+
+## What a branch actually is
+
+This is the most important thing to understand. A branch is just a file:
+```
+.jit/refs/heads/master    ← contains: a9f3b2...
+.jit/refs/heads/feature1  ← contains: a9f3b2...  (same commit at birth)
+.jit/refs/heads/feature2  ← contains: 7f3a9b...  (diverged after commits)
+```
+
+Each file contains exactly one thing — the hash of the latest commit on
+that branch. Creating a branch is literally just creating a new file.
+Deleting a branch is literally just deleting that file.
+
+---
+
+## Part 1 — Creating a branch
+
+### Algorithm step by step:
+
+**Step 1 — Build the new branch file path:**
+```
+.jit/refs/heads/branchname
+```
+Do this FIRST before anything else. A common mistake is checking the path
+before building it — the path would contain garbage memory.
+
+**Step 2 — Check if branch already exists:**
+Try to open the path with `"r"` mode. If it opens successfully the branch
+already exists — print an error and return. Don't overwrite silently!
+
+**Step 3 — Create the new branch file:**
+Open the path with `"w"` mode. This creates the file.
+
+**Step 4 — Read current branch name from HEAD:**
+`.jit/HEAD` contains:
+```
+ref: refs/heads/master
+```
+Read this line and extract the branch name from position 16 onwards
+(skipping `ref: refs/heads/`). Strip the newline with strcspn.
+
+**Step 5 — Open the current branch file and read commit hash:**
+Build the path to the current branch file and read its 40 byte commit hash.
+If this fails it means no commits exist yet — print error and return.
+
+**Step 6 — Write commit hash into new branch file:**
+```c
+fprintf(new_branch, "%s", line);
+```
+The new branch now points to the exact same commit as the current branch.
+Both branches are identical at birth.
+
+**Step 7 — Print confirmation:**
+```
+Branch feature1 created
+```
+
+---
+
+### Verified output:
+```bash
+$ ./jit branch feature1
+Branch feature1 created
+
+$ ./jit branch feature1
+error: branch feature1 already exists
+
+$ ./jit branch feature3
+Branch feature3 created
+```
+
+---
+
+### Full code:
+```c
+void branch(char *branch_name) {
+    char new_branch_path[1024];
+    char line[1024];
+    char curent_branch[1024];
+
+    // build path first
+    sprintf(new_branch_path, "./.jit/refs/heads/%s", branch_name);
+
+    // check if already exists
+    FILE* check = fopen(new_branch_path, "r");
+    if (check != NULL) {
+        printf("error: branch %s already exists\n", branch_name);
+        fclose(check);
+        return;
+    }
+
+    // create new branch file
+    FILE* new_branch = fopen(new_branch_path, "w");
+    if (new_branch == NULL) {
+        perror("Error creating branch");
+        return;
+    }
+
+    // read current branch from HEAD
+    FILE* head = fopen("./.jit/HEAD", "r");
+    if (head == NULL) {
+        printf("error opening head\n");
+        return;
+    }
+    fgets(line, 1024, head);
+    line[strcspn(line, "\n")] = '\0';
+    fclose(head);
+    strcpy(curent_branch, line + 16);  // skip "ref: refs/heads/"
+
+    // open current branch and read commit hash
+    char curent_branch_path[1024];
+    sprintf(curent_branch_path, "./.jit/refs/heads/%s", curent_branch);
+    FILE* curent = fopen(curent_branch_path, "r");
+    if (curent == NULL) {
+        printf("error: no commits yet, nothing to branch from\n");
+        return;
+    }
+    fgets(line, 1024, curent);
+    line[strcspn(line, "\n")] = '\0';
+    fclose(curent);
+
+    // write hash into new branch file
+    fprintf(new_branch, "%s", line);
+    fclose(new_branch);
+    printf("Branch %s created\n", branch_name);
+}
+```
+
+---
+
+## Part 2 — Deleting a branch
+
+### Algorithm step by step:
+
+**Step 1 — Read current branch from HEAD:**
+Same as above — open HEAD, read line, extract branch name from position 16.
+Strip newline with strcspn.
+
+**Step 2 — Block deletion of current branch:**
+Compare the current branch name against the branch the user wants to delete.
+If they match — you can't delete the branch you're standing on! Print error
+and return.
+
+This is the same protection real Git has:
+```
+error: Cannot delete branch 'master' checked out
+```
+
+**Step 3 — Build path and delete the file:**
+Use `remove()` from `<stdio.h>` — deletes a file and returns 0 on success,
+non-zero on failure. If the branch file doesn't exist, remove() returns
+non-zero and the else block catches it automatically — no separate existence
+check needed!
+
+**Step 4 — Print confirmation or error:**
+```
+Deleted branch feature1       ← remove() returned 0
+Could not delete branch xyz   ← remove() returned non-zero (didn't exist)
+```
+
+---
+
+### Verified output:
+```bash
+$ ./jit branch -d feature3
+Deleted branch feature3
+
+$ ./jit branch -d master
+cannot delete the branch you are in: master
+```
+
+---
+
+### Full code:
+```c
+void delete_branch(char *branch_name) {
+    char path[1024];
+    char link[1024];
+    char current_branch[1024];
+
+    // read current branch from HEAD
+    FILE* head = fopen("./.jit/HEAD", "r");
+    if (head == NULL) {
+        printf("error opening head\n");
+        return;
+    }
+    fgets(link, 1024, head);
+    fclose(head);
+    strcpy(current_branch, link + 16);
+    current_branch[strcspn(current_branch, "\n")] = '\0';
+
+    // block deletion of current branch
+    if (strcmp(current_branch, branch_name) == 0) {
+        printf("cannot delete the branch you are in: %s\n", branch_name);
+        return;
+    }
+
+    // delete the branch file
+    sprintf(path, "./.jit/refs/heads/%s", branch_name);
+    if (remove(path) == 0) {
+        printf("Deleted branch %s\n", branch_name);
+    } else {
+        printf("Could not delete branch %s\n", branch_name);
+    }
+}
+```
+
+---
+
+## How main.c handles both commands:
+```c
+else if (strcmp(argv[1], "branch") == 0) {
+    if (argc == 3) {
+        branch(argv[2]);                              // jit branch <name>
+    }
+    else if (argc == 4 && strcmp(argv[2], "-d") == 0) {
+        delete_branch(argv[3]);                       // jit branch -d <name>
+    }
+    else {
+        printf("usage: jit branch <name>\n");
+        printf("       jit branch -d <name>\n");
+    }
+}
+```
+
+---
+
+## What changes and what doesn't:
+
+| Thing | create branch | delete branch |
+|-------|--------------|---------------|
+| `.jit/refs/heads/newbranch` | ✅ created | ✅ deleted |
+| `.jit/refs/heads/master` | ❌ unchanged | ❌ unchanged |
+| `.jit/HEAD` | ❌ unchanged | ❌ unchanged |
+| `.jit/objects/` | ❌ unchanged | ❌ unchanged |
+| `.jit/index` | ❌ unchanged | ❌ unchanged |
+| files on disk | ❌ unchanged | ❌ unchanged |
+
+Creating or deleting a branch only touches the branch file itself.
+Nothing else changes at all!
+
+---
+
+## The remove() function
+From `<stdio.h>`. Deletes a file from the filesystem:
+```c
+int remove(const char* path);
+// returns 0 on success
+// returns non-zero on failure (file doesn't exist, no permission etc.)
+```
+
+No need for a separate existence check — the return value tells you
+everything you need to know!
+
+---
+
+*Last updated: February 2026*

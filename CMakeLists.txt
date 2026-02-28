@@ -16,4 +16,8 @@ add_executable(jit main.c
         log.h
         unstage.c
         unstage.h
+        branch.c
+        branch.h
+        delete_branch.c
+        delete_branch.h
 )
