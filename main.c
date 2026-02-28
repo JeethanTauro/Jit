@@ -4,6 +4,7 @@
 #include "add.h"
 #include "commit.h"
 #include  "status.h"
+#include "log.h"
 
 int main(int argc, char* argv[]) {
     //argv[0] is always the file name
@@ -40,6 +41,9 @@ int main(int argc, char* argv[]) {
     }
     else if (strcmp(argv[1],"status")==0) {
         status();
+    }
+    else if (strcmp(argv[1],"log")==0) {
+        jit_log();
     }
     else {
         perror("SYNTAX error");

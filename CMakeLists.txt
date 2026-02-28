@@ -12,4 +12,6 @@ add_executable(jit main.c
         commit.h
         status.c
         status.h
+        log.c
+        log.h
 )
