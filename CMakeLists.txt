@@ -14,4 +14,6 @@ add_executable(jit main.c
         status.h
         log.c
         log.h
+        unstage.c
+        unstage.h
 )
