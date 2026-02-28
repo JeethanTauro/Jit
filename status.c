@@ -94,9 +94,24 @@ void modified() {
     fclose(fptr);
 }
 void untracked() {
+    char *ignore_filenames[100];
+    int ignore_exists = 0;
+    char ignore_line_content[1024];
+    int ignore_count = 0;
     FILE* fptr = fopen("./.jit/index", "r");
     if (fptr == NULL) {
         perror("error opening index");
+    }
+    FILE* ignore_file = fopen("./.jitignore","r"); //open the file in jit ignore
+    if (ignore_file != NULL) {
+        ignore_exists=1;
+        //read the .jitignore file
+       while (fgets(ignore_line_content,sizeof(ignore_line_content),ignore_file)!=NULL) {
+           ignore_line_content[strcspn(ignore_line_content,"\n")] = '\0';
+           ignore_filenames[ignore_count] = malloc(strlen(ignore_line_content) + 1);
+           strcpy(ignore_filenames[ignore_count],ignore_line_content);
+           ignore_count++;
+       }
     }
     char line[1024];
     char filename[1024];
@@ -124,6 +139,16 @@ void untracked() {
                 continue;
             }
             if (dir->d_type == DT_DIR) continue;
+            int ignored = 0;
+            if (ignore_exists) {
+                for (int i=0; i<ignore_count;i++) {
+                    if (strcmp(dir->d_name,ignore_filenames[i]) == 0) {
+                        ignored = 1;
+                        break;
+                    }
+                }
+            }
+            if (ignored) continue;
             filenames_in_dir[dir_count] = malloc(strlen(dir->d_name) + 1);
             strcpy(filenames_in_dir[dir_count],dir->d_name); //storing the filename which are in the current directory
             dir_count++;
@@ -156,6 +181,7 @@ void untracked() {
     }
     for (int i = 0; i < index_count; i++) free(filenames_in_index[i]);
     for (int i = 0; i < dir_count; i++) free(filenames_in_dir[i]);
+    for (int i = 0; i < ignore_count; i++) free(ignore_filenames[i]);
 }
 void staged_yet_to_commit() {
     FILE* fptr = fopen("./.jit/index", "r");
