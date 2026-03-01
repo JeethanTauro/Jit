@@ -86,7 +86,7 @@ int commitFile(char str[]) {
     char parentHash[41] = "none";
     if (parentHashFile == NULL) {
         //that means this file doesnt exist, its the first commit
-        perror("failed to open parentHashFile");
+        printf("First commit : \n");
     }
     else {
         fread(parentHash, 1, 41, parentHashFile);
