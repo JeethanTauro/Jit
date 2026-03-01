@@ -7,7 +7,9 @@
 #include "log.h"
 #include "unstage.h"
 #include "branch.h"
+#include "check_branch.h"
 #include "delete_branch.h"
+#include "switch_branch.h"
 
 int main(int argc, char* argv[]) {
     //argv[0] is always the file name
@@ -69,6 +71,22 @@ int main(int argc, char* argv[]) {
         else {
             printf("usage: jit branch <name>\n");
             printf("       jit branch -d <name>\n");
+        }
+    }
+    else if (strcmp(argv[1],"switch")==0) {
+        if (argc < 4) {
+            switch_branch(argv[2]);
+        }
+        else{
+            printf("usage: jit switch <branch name>\n");
+        }
+    }
+    else if (strcmp(argv[1],"where")==0) {
+        if (argc < 3) {
+            check_branch();
+        }
+        else {
+            printf("usage: jit where\n");
         }
     }
     else {

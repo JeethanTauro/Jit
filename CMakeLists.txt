@@ -20,4 +20,8 @@ add_executable(jit main.c
         branch.h
         delete_branch.c
         delete_branch.h
+        switch_branch.c
+        switch_branch.h
+        check_branch.c
+        check_branch.h
 )
