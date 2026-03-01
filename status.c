@@ -135,7 +135,7 @@ void untracked() {
     int dir_count=0;
     if (d) {
         while ((dir = readdir(d)) != NULL) {
-            if (dir->d_name[0] == '.') {
+            if (strncmp(dir->d_name,"..",2)==0) {
                 continue;
             }
             if (dir->d_type == DT_DIR) continue;
