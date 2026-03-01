@@ -115,7 +115,7 @@ void untracked() {
     }
     char line[1024];
     char filename[1024];
-    printf("\n Untracked: \n \t \n");
+
     int  index_count = 0;
     char *filenames_in_index[1000];//list of the filenames in th eindex file
     char *filenames_in_dir[1000];
@@ -175,7 +175,12 @@ void untracked() {
         }
     }
     //freeing the allocated memory
+    int m = 0;
     for (int i=0; i<untracked_count;i++) {
+        if (m<1) {
+            printf("\n Untracked: \n \t \n");
+        }
+        m++;
         printf("\t  %s\n",untracked[i]);
         free(untracked[i]); // Free untracked
     }
