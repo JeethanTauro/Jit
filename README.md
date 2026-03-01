@@ -307,7 +307,7 @@ jit/
 
 ---
 ## Looking Forward
-- Implement Dynamic Memory allocation throught the codebase
+- Implement Dynamic Memory allocation throughout the codebase
 - Implement more of Git features like merge,diff,stash etc
 
 *Built in 10 days — March 2026*
