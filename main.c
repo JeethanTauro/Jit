@@ -10,6 +10,7 @@
 #include "check_branch.h"
 #include "delete_branch.h"
 #include "switch_branch.h"
+#include "reset.h"
 
 int main(int argc, char* argv[]) {
     //argv[0] is always the file name
@@ -19,8 +20,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     if (strcmp(argv[1],"init")==0) {
-        createJitDir();
-        printf("\n Jit initialised created \n");
+        if (argc<3) {
+            createJitDir();
+            printf("\n Jit initialised created \n");
+        }
+        else {
+            printf("usage: jit init \n");
+        }
+
     }
     else if (strcmp(argv[1], "add") == 0) {
         if (argc < 3) {
@@ -52,7 +59,13 @@ int main(int argc, char* argv[]) {
         status();
     }
     else if (strcmp(argv[1],"log")==0) {
-        jit_log();
+        if (argc<3) {
+            jit_log();
+        }
+        else {
+            printf("\nUsage: jit log\n");
+        }
+
     }
     else if (strcmp(argv[1],"unstage")==0) {
         if (argc < 3) {
@@ -88,6 +101,13 @@ int main(int argc, char* argv[]) {
         else {
             printf("usage: jit where\n");
         }
+    }
+    else if (strcmp(argv[1], "reset") == 0) {
+        if (argc < 3) {
+            printf("usage: jit reset <commit-hash>\n");
+            return 1;
+        }
+        reset(argv[2]);
     }
     else {
         printf("SYNTAX error: unknown command '%s'\n", argv[1]);
