@@ -111,7 +111,7 @@ int main(int argc, char* argv[]) {
     }
     else {
         printf("SYNTAX error: unknown command '%s'\n", argv[1]);
-        printf("available commands: init, add, commit, status, log, unstage, reset\n");
+        printf("available commands: init, add, commit, status, log, unstage, reset, branch, switch, where\n");
         return 1;
     }
 
