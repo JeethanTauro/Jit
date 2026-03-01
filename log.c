@@ -16,13 +16,28 @@
 
 void jit_log(){
     char current_hash[41];
-    FILE* master = fopen("./.jit/refs/heads/master","r");
-    if(master == NULL) {
-        perror("Couldn't open master");
+    char line[1024];
+    char current_branch[1024];
+    char path[1024];
+    FILE* head = fopen("./.jit/HEAD","r");
+    if (head==NULL) {
+        perror("Couldn't open HEAD");
+        return;
     }
-    fread(current_hash,1,40,master);//read the latest commit hash
+    fgets(line,1024,head);
+    strcpy(current_branch,line+16);
+    current_branch[strcspn(current_branch, "\n")] = '\0';
+    fclose(head);
+
+    sprintf(path,"./.jit/refs/heads/%s",current_branch);
+    FILE* branch = fopen(path,"r");
+    if(branch == NULL) {
+        perror("Couldn't open master");
+        return;
+    }
+    fread(current_hash,1,40,branch);//read the latest commit hash
     current_hash[40] = '\0';
-    fclose(master);
+    fclose(branch);
     char folder[3];
     char filename[1024];
     char commit_file_path[1024];
@@ -39,6 +54,7 @@ void jit_log(){
         FILE* commit_file = fopen(commit_file_path,"r");
         if(commit_file == NULL) {
             perror("Couldn't open commit file");
+            return;
         }
 
         while (fgets(commit_content_line,sizeof(commit_content_line),commit_file) != NULL) {

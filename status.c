@@ -200,8 +200,23 @@ void staged_yet_to_commit() {
     }
     fclose(fptr);
     char latest_commit[1024];
-    FILE* master = fopen("./.jit/refs/heads/master", "r");
-    if (master == NULL) {
+
+    char current_branch[1024];
+    char path[1024];
+    FILE* head = fopen("./.jit/HEAD","r");
+    if (head==NULL) {
+        perror("Couldn't open HEAD");
+        return;
+    }
+    fgets(line,1024,head);
+    strcpy(current_branch,line+16);
+    current_branch[strcspn(current_branch, "\n")] = '\0';
+    fclose(head);
+
+    sprintf(path,"./.jit/refs/heads/%s",current_branch);
+
+    FILE* branch = fopen(path, "r");
+    if (branch == NULL) {
         if (k > 0) {
             printf("\nChanges to be committed:\n");
             for (int i = 0; i < k; i++) {
@@ -210,8 +225,8 @@ void staged_yet_to_commit() {
         }
         return;
     }
-    fread(latest_commit, 1, 40, master);//reading the latest commit hash
-    fclose(master);
+    fread(latest_commit, 1, 40, branch);//reading the latest commit hash
+    fclose(branch);
     latest_commit[40] = '\0';
 
 

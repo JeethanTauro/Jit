@@ -68,7 +68,21 @@ int commitFile(char str[]) {
     time(&timestamp);
 
     //reading parent hash
-    FILE* parentHashFile = fopen("./.jit/refs/heads/master","r");
+    char current_branch[1024];
+    char path[1024];
+    FILE* head = fopen("./.jit/HEAD","r");
+    if (head==NULL) {
+        perror("Couldn't open HEAD");
+        return 0;
+    }
+    fgets(line,1024,head);
+    strcpy(current_branch,line+16);
+    current_branch[strcspn(current_branch, "\n")] = '\0';
+    fclose(head);
+
+    sprintf(path,"./.jit/refs/heads/%s",current_branch);
+
+    FILE* parentHashFile = fopen(path,"r");
     char parentHash[41] = "none";
     if (parentHashFile == NULL) {
         //that means this file doesnt exist, its the first commit
@@ -177,12 +191,26 @@ int check_for_commit() {
         return 0;
     }
     char latest_commit[41];
-    FILE* master = fopen("./.jit/refs/heads/master", "r");
-    if (master == NULL) {
+    char current_branch[1024];
+    char path[1024];
+    FILE* head = fopen("./.jit/HEAD","r");
+    if (head==NULL) {
+        perror("Couldn't open HEAD");
+        return 0;
+    }
+    fgets(line,1024,head);
+    strcpy(current_branch,line+16);
+    current_branch[strcspn(current_branch, "\n")] = '\0';
+    fclose(head);
+
+    sprintf(path,"./.jit/refs/heads/%s",current_branch);
+
+    FILE* branch = fopen(path, "r");
+    if (branch == NULL) {
          return 1; //first commit so proceed.
     }
-    fread(latest_commit, 1, 40, master);//reading the latest commit hash
-    fclose(master);
+    fread(latest_commit, 1, 40, branch);//reading the latest commit hash
+    fclose(branch);
     latest_commit[40] = '\0';
 
 
