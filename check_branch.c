@@ -16,6 +16,7 @@ void check_branch() {
         return;
     }
     fgets(line,1024,head);
+    fclose(head);
     strcpy(current_branch,line+16);
     current_branch[strcspn(current_branch,"\n")]='\0';
 
@@ -36,4 +37,5 @@ void check_branch() {
 
         }
     }
+    closedir(d);
 }
