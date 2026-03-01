@@ -176,6 +176,7 @@ int check_for_commit() {
     FILE* i = fopen("./.jit/index", "r");
     if (i == NULL) {
         perror("failed to open index");
+        return 0;
     }
     int k=0;
     while (fgets(line, sizeof(line), i)) {
@@ -232,6 +233,7 @@ int check_for_commit() {
     FILE* commit_file = fopen(tree_hash_path,"r");
     if (commit_file == NULL) {
         perror("Could not open commit_file");
+        return 0;
     }
     fgets(tree_hash,sizeof(tree_hash),commit_file); //reading the first line to the the 'tree hash'
     fclose(commit_file);

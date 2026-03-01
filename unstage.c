@@ -15,6 +15,7 @@ void unstage(char *filename) {
     FILE* indexRead = fopen("./.jit/index","r");
     if (indexRead == NULL) {
         perror("\n Error opening index file");
+        return;
     }
     int count = 0;
     //reading all the hashes and the file names
