@@ -3755,3 +3755,494 @@ everything you need to know!
 ---
 
 *Last updated: February 2026*
+
+# Jit — Day 9 Progress
+### jit switch and jit reset — Complete Implementation
+
+---
+
+## Table of Contents
+1. [What we built today](#built)
+2. [jit branch — create and delete recap](#branch)
+3. [jit switch — full algorithm in detail](#switch)
+4. [Helper functions in switch_branch.c](#helpers)
+5. [The key insight — tree IS a snapshot of index](#insight)
+6. [Why we block switching with uncommitted changes](#block)
+7. [jit reset — full algorithm in detail](#reset)
+8. [How reset differs from switch](#diff)
+9. [The warning prompt](#warning)
+10. [Testing — all cases verified](#testing)
+11. [Full commands list](#commands)
+
+---
+
+## 1. What we built today <a name="built"></a>
+
+Completed `jit switch`, `jit branch -d`, `jit where` and `jit reset` — the final commands of the project. Also fixed a critical bug where all commands were hardcoded to read from master instead of reading HEAD to get the current branch.
+
+**Verified working:**
+```bash
+$ jit branch feature
+Branch feature created
+
+$ jit switch feature
+Switched to branch feature
+
+$ jit reset abc123
+warning: this will reset your branch to commit abc123
+all commits after this point will be lost!
+do you want to continue? (yes/no): yes
+HEAD is now at abc123
+```
+
+**Commands now complete:**
+```
+jit init      ✅
+jit add       ✅
+jit commit    ✅
+jit status    ✅
+jit log       ✅
+jit unstage   ✅
+jit branch    ✅
+jit switch    ✅
+jit reset     ✅
+.jitignore    ✅
+```
+
+---
+
+## 2. jit branch — create and delete recap <a name="branch"></a>
+
+A branch is just a file inside `.jit/refs/heads/` containing a commit hash. Nothing more.
+
+```
+.jit/refs/heads/master    ← contains latest commit hash on master
+.jit/refs/heads/feature   ← contains latest commit hash on feature
+```
+
+**Creating:**
+- Build path `.jit/refs/heads/branchname`
+- Check it doesn't already exist
+- Read current commit hash from HEAD → current branch
+- Write that hash into the new branch file
+
+**Deleting:**
+- Read HEAD to get current branch name
+- Block if user tries to delete current branch
+- Use `remove()` to delete the branch file
+
+**Listing (`jit where`):**
+- Read HEAD to get current branch name
+- Use `opendir` on `.jit/refs/heads/`
+- Print each branch, marking current one with `<-current branch`
+
+---
+
+## 3. jit switch — full algorithm in detail <a name="switch"></a>
+
+Switching branches means making your working directory look exactly like it did when the last commit was made on the target branch. Five major phases:
+
+---
+
+### Phase 1 — Safety checks
+
+**Check 1 — Branch exists:**
+Build path `.jit/refs/heads/branchname` and try to open it. If NULL — branch doesn't exist, print error and return.
+
+**Check 2 — Not already on this branch:**
+Read `.jit/HEAD` — it contains `ref: refs/heads/branchname`. Extract the branch name from position 16. Compare with target branch. If same — already here, return.
+
+**Check 3 — No unstaged local changes:**
+Call `check_local_modified()`. This reads every entry from the index, opens the corresponding file on disk, hashes it, and compares with the stored hash. If ANY file on disk differs from its index entry — there are unstaged changes. Block the switch.
+
+```
+index hash of main.c = abc123
+disk hash of main.c  = def456  ← modified! block switch
+```
+
+**Check 4 — No staged but uncommitted changes:**
+Compare index entries against current branch's last commit tree. If ANY index entry has a different hash than the tree — something was staged but not committed. Block the switch.
+
+This is the two level safety check:
+```
+Level 1: disk vs index      → unstaged changes
+Level 2: index vs tree      → staged but uncommitted changes
+```
+
+Both must be clean before switching is allowed.
+
+---
+
+### Phase 2 — Read current tree
+
+Before switching, we need to know what files the CURRENT branch has — so we can delete files that don't belong in the target branch.
+
+Steps:
+1. Read HEAD → get current branch name
+2. Open current branch file → get current commit hash
+3. Build path to current commit object → read first line → extract tree hash
+4. Build path to current tree object → read all blob entries into array of structs
+
+Now we have `current_tree[]` — every file that exists in the current branch.
+
+---
+
+### Phase 3 — Read target tree
+
+Same navigation but for the TARGET branch:
+1. Open target branch file → get target commit hash
+2. Build path to target commit object → read first line → extract tree hash
+3. Build path to target tree object → read all blob entries into array of structs
+
+Now we have `f[]` — every file that should exist after the switch.
+
+---
+
+### Phase 4 — Delete files that don't belong
+
+Two separate deletion passes:
+
+**Pass 1 — Compare current tree vs target tree:**
+For each file in current_tree — search for it in f[] (target tree). If not found — this file existed in the current branch but doesn't exist in the target branch. Delete it from disk using `remove()`.
+
+**Pass 2 — Scan working directory:**
+Use `opendir(".")` and `readdir()` to list every file on disk. For each file, check if it's in the target tree f[]. If not found — delete it. This catches any files that might have been created outside of jit's awareness.
+
+```
+current branch has: main.c, feature.c
+target branch has:  main.c only
+→ feature.c gets deleted from disk
+```
+
+---
+
+### Phase 5 — Restore files from target branch
+
+For each entry in f[] (target tree):
+1. Build path to blob object using the blob hash — first 2 chars = folder, remaining 38 = filename
+2. Open blob object and `fread()` its contents into a 65536 byte buffer — capture actual length with `size_t len`
+3. Open the original filename on disk with `"w"` mode — creates or overwrites
+4. `fwrite(buffer, 1, len, fptr)` — write exactly `len` bytes back to disk
+5. Close both files
+
+The blob object IS the file. Reading it and writing it back to the original filename restores the file to exactly what it was at commit time.
+
+---
+
+### Phase 6 — Update index and HEAD
+
+**Update index:**
+Open `.jit/index` with `"w"` mode — wipes it. Loop through f[] and write each entry as `hash filename\n`. Index now matches the target branch's tree.
+
+**Update HEAD:**
+Open `.jit/HEAD` with `"w"` mode and write:
+```
+ref: refs/heads/branchname
+```
+Now jit knows which branch you're on. All future commits will update this branch's file.
+
+---
+
+## 4. Helper functions in switch_branch.c <a name="helpers"></a>
+
+We split the logic into clean helper functions:
+
+### check(branch_name)
+Tries to open the branch file. Returns 1 if exists, 0 if not. Used to verify the branch exists before switching.
+
+### already_present_branch(branch_name)
+Reads HEAD, extracts current branch name, compares with target. Returns 1 if already on that branch.
+
+### commit_hash_from_branch(branch_name)
+Builds path to branch file, reads 40 byte hash, strips newline. Returns pointer to static buffer containing the hash. Returns NULL if branch file can't be opened.
+
+Uses `static char commit_hash[1024]` — critical! A regular local variable would be destroyed when the function returns, making the pointer invalid. Static keeps it alive.
+
+### check_local_modified()
+Reads index line by line. For each entry:
+- Extracts hash and filename
+- Opens file from disk
+- Reads contents into 65536 byte buffer
+- Hashes with `calc_hashing()`
+- Compares disk hash vs index hash
+- If different → increments changes counter
+
+Returns 1 if any changes found, 0 if clean.
+
+---
+
+## 5. The key insight — tree IS a snapshot of index <a name="insight"></a>
+
+This was figured out during development — one of the most important conceptual breakthroughs:
+
+```
+index  →  when you commit  →  becomes the tree object
+tree   →  when you switch  →  becomes the index
+```
+
+The tree object is literally a frozen snapshot of what the index looked like at commit time. When you switch branches you're thawing that snapshot back into the index.
+
+This is why after a switch:
+- Index matches the tree ✅
+- Disk files match the blobs ✅
+- `jit status` shows clean ✅
+
+All three are in sync because they all came from the same source — the tree object.
+
+---
+
+## 6. Why we block switching with uncommitted changes <a name="block"></a>
+
+When you have staged but uncommitted changes:
+```
+index has:  main.c version 3    ← staged, not committed
+tree has:   main.c version 2    ← last commit snapshot
+```
+
+If we allowed switching and overwrote the index with the target branch's tree — version 3 is GONE FOREVER. No snapshot was ever made of that state. There's no way to recover it.
+
+Real Git gives the same error:
+```
+error: Your local changes would be overwritten by checkout
+Please commit or stash your changes before switching branches
+```
+
+Git is protecting you from losing work that was never snapshotted. The solution is always either commit first or discard the changes.
+
+---
+
+## 7. jit reset — full algorithm in detail <a name="reset"></a>
+
+Reset moves the current branch pointer back to an older commit and restores all files to match that commit's state. Unlike switch which moves between branches, reset moves within a branch's history.
+
+---
+
+### Step 1 — Warning prompt
+
+Before doing anything destructive, show the user what's about to happen and ask for confirmation:
+
+```c
+printf("warning: this will reset your branch to commit %.7s\n", commit_hash);
+printf("all commits after this point will be lost!\n");
+printf("do you want to continue? (yes/no): ");
+```
+
+Read response with `fgets()`. Strip newline with `strcspn()`. Only proceed if response is exactly `"yes"` — anything else (`y`, `YES`, blank) aborts.
+
+`%.7s` prints only the first 7 characters of the hash — same short format Git uses.
+
+---
+
+### Step 2 — Verify commit exists
+
+Build path to commit object using the hash user typed:
+- First 2 chars = folder
+- Remaining 38 chars = filename
+- Build: `.jit/objects/xx/xxxxxx`
+
+Try to open it. If NULL — hash is wrong or doesn't exist. Print error and return. Don't proceed with a bad hash.
+
+---
+
+### Step 3 — Extract tree hash from commit object
+
+Read first line of commit object — it says `tree xxxxxxxxx`. Extract just the hash:
+```c
+fgets(line, sizeof(line), commit_file);
+strcpy(tree_hash, line + 5);           // skip "tree "
+tree_hash[strcspn(tree_hash, " \n")] = '\0';  // strip space and newline
+```
+
+---
+
+### Step 4 — Read all blob entries from tree object
+
+Build path to tree object using tree hash. Read every line into array of structs:
+```
+blob hash filename
+```
+- Hash at position 5 (after "blob ")
+- Filename at position 46 (after "blob " + 40 char hash + " ")
+
+Store each entry's hash and filename in `entries[]` array.
+
+---
+
+### Step 5 — Restore every file to disk
+
+For each entry in `entries[]`:
+1. Build path to blob object using `entries[i].hash`
+2. Open blob object and `fread()` contents into buffer — capture `len`
+3. Open `entries[i].filename` with `"w"` mode
+4. `fwrite(buffer, 1, len, restored)` — write exactly len bytes
+5. Close both files
+
+The blob contains the raw file contents from that point in history. Writing it back restores the file perfectly.
+
+---
+
+### Step 6 — Delete files not in target commit
+
+Use `opendir(".")` and `readdir()` to list every file on disk. Skip:
+- Hidden files (name starts with `.`)
+- Directories (`d_type == DT_DIR`)
+- The jit executable
+
+For each remaining file, check if it exists in `entries[]`. If not found — this file shouldn't exist at the target commit. Delete it with `remove()`.
+
+---
+
+### Step 7 — Update index
+
+Open `.jit/index` with `"w"` mode — wipes it completely. Loop through `entries[]` and write each as:
+```
+hash filename\n
+```
+Index now perfectly reflects the state at the target commit.
+
+---
+
+### Step 8 — Update current branch pointer
+
+Read HEAD to get current branch name. Open that branch file with `"w"` mode. Write the target commit hash. The branch now points to the older commit — all newer commits become unreachable from this branch.
+
+```
+before: master → commit 3 → commit 2 → commit 1
+after:  master → commit 1
+# commit 2 and 3 still exist in .jit/objects but nothing points to them
+```
+
+---
+
+### Step 9 — Confirmation
+
+```c
+printf("HEAD is now at %.7s\n", commit_hash);
+```
+
+---
+
+## 8. How reset differs from switch <a name="diff"></a>
+
+They share almost identical file restoration logic. The differences:
+
+| Thing | switch | reset |
+|-------|--------|-------|
+| Commit hash source | reads from branch file | receives from argv[2] |
+| Safety checks | blocks uncommitted changes | no check — intentionally destructive |
+| What gets updated | HEAD (current branch pointer) | current branch file (moves it back) |
+| Warning prompt | none | yes — confirms before destroying history |
+| File deletion | deletes files not in target tree | deletes files not in target commit |
+| Index update | matches target branch tree | matches target commit tree |
+
+The core loop — build blob path, fread, fwrite — is identical in both. Reset was written by reusing switch's logic almost entirely.
+
+---
+
+## 9. The warning prompt <a name="warning"></a>
+
+```c
+printf("warning: this will reset your branch to commit %.7s\n", commit_hash);
+printf("all commits after this point will be lost!\n");
+printf("do you want to continue? (yes/no): ");
+
+char response[10];
+fgets(response, sizeof(response), stdin);
+response[strcspn(response, "\n")] = '\0';
+
+if (strcmp(response, "yes") != 0) {
+    printf("reset aborted\n");
+    return;
+}
+```
+
+`fgets(response, sizeof(response), stdin)` reads from keyboard — `stdin` is standard input, the terminal. The user types their response and hits enter.
+
+Only `"yes"` proceeds — `"y"`, `"YES"`, `"yeah"` all abort. This is intentional — destructive operations should require explicit confirmation.
+
+---
+
+## 10. Testing — all cases verified <a name="testing"></a>
+
+### Full test run results:
+
+```
+Test 1  ✅  init, add, commit, log working
+Test 2  ✅  branch create, duplicate check, no args
+Test 3  ✅  switch working, where shows correct branch
+Test 4  ✅  commit on feature shows correct log (2 commits)
+Test 5  ✅  switch to master — feature.c DELETED, main.c restored to v1
+Test 6  ✅  commit on master independently
+Test 7  ✅  switch to feature — feature.c RESTORED, main.c = v1, master commit not in log
+Test 8  ✅  unstaged changes blocked, staged changes blocked, clean switch allowed
+Test 9  ✅  status clean after switch
+Test 10 ✅  branch delete working, self-delete blocked
+```
+
+### Reset test:
+```bash
+# three commits made
+jit branch backup          # save safety net
+jit reset <commit 1 hash>  # reset to oldest commit
+cat main.c                 # shows version 1 only ✅
+jit log                    # shows only commit 1 ✅
+jit status                 # clean ✅
+jit switch backup          # switch to backup
+cat main.c                 # shows all 3 versions ✅
+jit log                    # shows all 3 commits ✅
+```
+
+Branches are completely independent. Reset is destructive on the target branch but other branches are untouched — verified by switching to backup and confirming full history is intact.
+
+---
+
+## 11. The hardcoded master bug <a name="bug"></a>
+
+One critical bug fixed today — many functions were hardcoded to read from master:
+
+```c
+FILE* master = fopen("./.jit/refs/heads/master", "r");  // WRONG
+```
+
+This caused all commands to behave incorrectly on any non-master branch. The fix was applied to four places:
+- `commitFile()` — reading parent hash
+- `commitFile()` — writing new commit hash after commit
+- `check_for_commit()` — comparing index vs last commit
+- `staged_yet_to_commit()` — comparing index vs last commit tree
+- `jit_log()` — reading latest commit to start traversal
+
+The fix in all cases:
+```c
+// read HEAD first
+FILE* head = fopen("./.jit/HEAD", "r");
+fgets(line, 1024, head);
+fclose(head);
+strcpy(current_branch, line + 16);  // skip "ref: refs/heads/"
+current_branch[strcspn(current_branch, "\n")] = '\0';
+
+// then build path dynamically
+sprintf(path, "./.jit/refs/heads/%s", current_branch);
+FILE* branch = fopen(path, "r");
+```
+
+After this fix all commands work correctly regardless of which branch you're on.
+
+---
+
+## Status of commands:
+```
+jit init      ✅
+jit add       ✅
+jit commit    ✅  with nothing-to-commit guard, branch aware
+jit status    ✅  with .jitignore support, branch aware
+jit log       ✅  branch aware
+jit unstage   ✅
+jit branch    ✅  create and delete
+jit where     ✅  list all branches
+jit switch    ✅  with full safety checks
+jit reset     ✅  with warning prompt
+```
+
+---
+
+*Last updated: March 2026*
