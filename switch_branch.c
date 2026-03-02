@@ -16,6 +16,9 @@ int already_present_branch(char *branch_name);
 char* commit_hash_from_branch(char *branch_name);
 int check_local_modified();
 char* calc_hashing(char buffer[] ,size_t len);
+int exists_in_index(char *filename,
+                    struct filename_hash index_entries[],
+                    int index_count);
 
 void switch_branch(char *branch_name) {
     //the current code i am only doing tree v/s index comparison
@@ -230,6 +233,28 @@ void switch_branch(char *branch_name) {
         file_count++;
     }
     fclose(tree_file);
+    // Overwrite protection check
+
+    for(int i=0;i<file_count;i++)
+    {
+        FILE *fp = fopen(f[i].filename,"r");
+
+        if(fp!=NULL)
+        {
+            fclose(fp);
+
+            if(!exists_in_index(f[i].filename,
+                                index_entries,
+                                index_count))
+            {
+                printf("error: untracked file would be overwritten:\n");
+                printf("    %s\n",f[i].filename);
+                printf("please remove or move it before switching\n");
+
+                return;
+            }
+        }
+    }
     for (int i = 0; i < current_tree_count; i++) {
         int found = 0;
         for (int j = 0; j < file_count; j++) {
@@ -245,38 +270,6 @@ void switch_branch(char *branch_name) {
         }
     }
 
-    //compare the current working directory with the target tree
-    DIR *dir;
-    struct dirent *entry;
-    dir = opendir(".");
-    if (dir == NULL) {
-        perror("could not open working directory");
-        return;
-    }
-    while ((entry = readdir(dir)) != NULL) {
-
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0)
-            continue;
-
-        if (strcmp(entry->d_name, ".jit") == 0)
-            continue;
-        int found = 0;
-        for (int i = 0; i < file_count; i++) {
-            if (strcmp(entry->d_name, f[i].filename) == 0) {
-                found = 1;
-                break;
-            }
-        }
-
-        if (!found) {
-            char delete_path[1024];
-            sprintf(delete_path, "./%s", entry->d_name);
-            remove(delete_path);
-        }
-    }
-
-    closedir(dir);
 
     //for each entry in the struct array
     //we have to go that file content and then overrite those files in disk
@@ -428,5 +421,16 @@ int check_local_modified() {
         return 1;
     }
     fclose(fptr);
+    return 0;
+}
+int exists_in_index(char *filename,
+                    struct filename_hash index_entries[],
+                    int index_count)
+{
+    for(int i=0;i<index_count;i++)
+    {
+        if(strcmp(filename,index_entries[i].filename)==0)
+            return 1;
+    }
     return 0;
 }
