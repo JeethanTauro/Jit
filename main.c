@@ -111,7 +111,7 @@ int main(int argc, char* argv[]) {
         reset(argv[2]);
     }
     else if (strcmp(argv[1],"restore")==0) {
-        if (argc < 4) {
+        if (argc == 3) {
             restore(argv[2]);
         }
         else {
