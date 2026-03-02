@@ -38,10 +38,66 @@ int addFile(char *arr[]) {
     for (int i=0; arr[i] != NULL; i++) {
 
         FILE* fptr = fopen(arr[i], "r");
-        if (fptr == NULL) {
-            printf("file not found: %s\n", arr[i]);
-            return 0;
+
+        /* ---------- DELETION STAGING ---------- */
+        //if the file doesnt exist in th direcotry it has been deleted
+        if (fptr == NULL)
+        {
+            struct file_and_hash entries[100];
+            int count = 0;
+
+            FILE* indexRead = fopen("./.jit/index", "r");
+
+            if(indexRead != NULL){
+                char indexLine[1024];
+
+                while(fgets(indexLine,sizeof(indexLine),indexRead)!=NULL){
+                    strncpy(entries[count].hash,indexLine,40);
+                    entries[count].hash[40]='\0';
+
+                    strcpy(entries[count].filename,indexLine+41);
+                    entries[count].filename[strcspn(entries[count].filename,"\n")]='\0';
+
+                    count++;
+                }
+
+                fclose(indexRead);
+            }
+
+            /* remove file from index */
+
+            int pos=-1;
+
+            for(int k=0;k<count;k++){
+                if(strcmp(entries[k].filename,arr[i])==0){
+                    pos=k;
+                    break;
+                }
+            }
+            if(pos!=-1){
+                for(int m=pos;m<count-1;m++)
+                    entries[m]=entries[m+1];
+                count--;
+            }
+            /* rewrite index */
+
+            FILE* indexWrite=fopen("./.jit/index","w");
+            if(indexWrite==NULL)
+            {
+                perror("failed to open index");
+                return 0;
+            }
+            for(int k=0;k<count;k++)
+                fprintf(indexWrite,"%s %s\n",
+                        entries[k].hash,
+                        entries[k].filename);
+            fclose(indexWrite);
+            if(pos!=-1)
+                printf("staged deletion: %s\n",arr[i]);
+            continue;
         }
+
+
 
         const size_t length = fread(buffer, sizeof(char), 65536, fptr);
         fclose(fptr);
