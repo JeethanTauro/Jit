@@ -11,6 +11,7 @@
 #include "delete_branch.h"
 #include "switch_branch.h"
 #include "reset.h"
+#include "restore.h"
 
 int main(int argc, char* argv[]) {
     //argv[0] is always the file name
@@ -109,9 +110,17 @@ int main(int argc, char* argv[]) {
         }
         reset(argv[2]);
     }
+    else if (strcmp(argv[1],"restore")==0) {
+        if (argc < 4) {
+            restore(argv[2]);
+        }
+        else {
+            printf("usage: jit restore <filename>\n");
+        }
+    }
     else {
         printf("SYNTAX error: unknown command '%s'\n", argv[1]);
-        printf("available commands: init, add, commit, status, log, unstage, reset, branch, switch, where\n");
+        printf("available commands: init, add, commit, status, log, unstage, reset, branch, switch, where, restore\n");
         return 1;
     }
 

@@ -26,4 +26,6 @@ add_executable(jit main.c
         check_branch.h
         reset.c
         reset.h
+        restore.c
+        restore.h
 )
