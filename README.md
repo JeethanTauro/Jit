@@ -195,6 +195,14 @@ warning: this will reset your branch to commit a9f3b2e
 all commits after this point will be lost!
 do you want to continue? (yes/no):
 ```
+---
+
+### `jit restore <filename>`
+Restores the changes in a file that had been previously staged
+
+```bash
+jit restore main.c
+```
 
 ---
 
